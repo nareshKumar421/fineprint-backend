@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# Composer
+/vendor/
+composer.lock
+
+# Logs and runtime
+*.log
+/logs/
+/tmp/
+/backups/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
