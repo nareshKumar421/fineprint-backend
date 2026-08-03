@@ -53,9 +53,19 @@ set_exception_handler(function (Throwable $e): void {
 
 // Warnings and notices become exceptions, so they cannot half-execute a
 // request and return a 200 with a broken body.
+//
+// DEPRECATIONS ARE EXCLUDED, deliberately. A deprecation is a note about a
+// FUTURE removal, not a fault in this request — PHP 8.5 deprecated
+// curl_close(), and throwing on it turned every cURL call in the API into a
+// 500. Upgrading PHP must never take production down that way. They are
+// logged so they still get fixed.
 set_error_handler(function (int $severity, string $message, string $file, int $line): bool {
     if (!(error_reporting() & $severity)) {
         return false;
+    }
+    if ($severity === E_DEPRECATED || $severity === E_USER_DEPRECATED) {
+        error_log("DEPRECATED: {$message} in {$file}:{$line}");
+        return true;
     }
     throw new ErrorException($message, 0, $severity, $file, $line);
 });

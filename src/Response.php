@@ -44,6 +44,30 @@ final class Response
         self::json(['error' => ['code' => $code, 'message' => $message]], $status);
     }
 
+    /**
+     * HTML — used ONLY by the local payment sandbox.
+     *
+     * The API contract is JSON everywhere (docs/03 §6); this is the one
+     * deliberate exception, because it stands in for a hosted payment page
+     * that a browser has to render.
+     */
+    public static function html(string $markup, int $status = 200): void
+    {
+        if (self::$sent) {
+            return;
+        }
+        self::$sent = true;
+
+        if (!headers_sent()) {
+            http_response_code($status);
+            header('Content-Type: text/html; charset=utf-8');
+            header('X-Content-Type-Options: nosniff');
+            header('Cache-Control: no-store');
+        }
+
+        echo $markup;
+    }
+
     public static function alreadySent(): bool
     {
         return self::$sent;

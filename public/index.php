@@ -11,6 +11,7 @@ declare(strict_types=1);
 require __DIR__ . '/../src/bootstrap.php';
 
 use App\Controllers\AuthController;
+use App\Controllers\DonationController;
 use App\Controllers\CategoryController;
 use App\Controllers\FeedController;
 use App\Request;
@@ -32,11 +33,19 @@ $router->post('/api/user/categories', [CategoryController::class, 'save'], auth:
 /* ---- feed ------------------------------------------------------------ */
 $router->get('/api/feed', [FeedController::class, 'index'], auth: true);
 
-/* ---- donations ----------------------------------------- PHASE 7 ----
-$router->post('/api/donation/create',  [DonationController::class, 'create'], auth: true);
+/* ---- donations ------------------------------------------------------- */
+// 10 per USER per hour (the trailing true) — keying this on IP would make
+// everyone behind one NAT share a single quota.
+$router->post('/api/donation/create',  [DonationController::class, 'create'],
+              auth: true, limit: ['donate', 10, 3600, true]);
 $router->get ('/api/donation/status',  [DonationController::class, 'status'], auth: true);
+
+// No auth: Instamojo's server calls this and the SIGNATURE is the auth.
 $router->post('/api/donation/webhook', [DonationController::class, 'webhook']);
------------------------------------------------------------------------- */
+
+// Local sandbox payment page. 404s unless INSTAMOJO_API_KEY is empty AND
+// APP_ENV is not production.
+$router->get ('/api/donation/sandbox', [DonationController::class, 'sandbox']);
 
 /* ---- account ------------------------------------------- PHASE 8 ----
 $router->delete('/api/user/account', [AccountController::class, 'destroy'], auth: true);

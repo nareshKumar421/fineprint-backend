@@ -56,15 +56,27 @@ final class Router
 
         $route = $this->routes[$key];
 
-        // Rate limit BEFORE auth, so hammering a protected endpoint with junk
-        // tokens is still throttled.
-        if ($route['limit'] !== null) {
-            [$bucket, $max, $seconds] = $route['limit'];
-            RateLimit::check($request, $bucket, $max, $seconds);
+        /*
+         * Per-IP limits run BEFORE auth, so hammering a protected endpoint
+         * with junk tokens is still throttled.
+         *
+         * Per-USER limits must run AFTER, because the user is only known
+         * once the token has been resolved. Those endpoints are already
+         * behind auth, so an unauthenticated attacker never reaches them.
+         */
+        $limit   = $route['limit'];
+        $perUser = $limit !== null && ($limit[3] ?? false) === true;
+
+        if ($limit !== null && !$perUser) {
+            RateLimit::check($request, $limit[0], $limit[1], $limit[2]);
         }
 
         if ($route['auth']) {
             Auth::authenticate($request);
+        }
+
+        if ($limit !== null && $perUser) {
+            RateLimit::check($request, $limit[0], $limit[1], $limit[2], true);
         }
 
         $handler = $route['handler'];

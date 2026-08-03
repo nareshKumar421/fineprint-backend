@@ -106,7 +106,6 @@ function feed_fetch(string $url, ?int $timeout = null): array
     $status = (int)    curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $final  = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
     $ctype  = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    curl_close($ch);
 
     if ($body === false || $err !== '') {
         throw new RuntimeException("network error: {$err}");

@@ -23,9 +23,27 @@ use PDOException;
 
 final class RateLimit
 {
-    public static function check(Request $request, string $bucket, int $max, int $seconds): void
-    {
-        $key = $bucket . ':' . $request->ip();
+    /**
+     * @param bool $perUser key on the authenticated user rather than the IP.
+     *
+     * Per-IP is right for login and register: there is no user yet, and the
+     * IP is the only thing an attacker cannot trivially vary.
+     *
+     * Per-user is right for donations. docs/03 §5 specifies "10 per user per
+     * hour", and keying that on IP would make everyone behind one office or
+     * mobile-carrier NAT share a single quota — one person donating would
+     * lock out the building.
+     */
+    public static function check(
+        Request $request,
+        string $bucket,
+        int $max,
+        int $seconds,
+        bool $perUser = false,
+    ): void {
+        $key = $perUser && $request->userId !== null
+            ? $bucket . ':u' . $request->userId
+            : $bucket . ':' . $request->ip();
 
         try {
             // One atomic statement. The CASE resets the window when it has
