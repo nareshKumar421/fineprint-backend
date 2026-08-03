@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../src/bootstrap.php';
 
+use App\Controllers\AccountController;
 use App\Controllers\AuthController;
 use App\Controllers\DonationController;
 use App\Controllers\CategoryController;
@@ -47,7 +48,13 @@ $router->post('/api/donation/webhook', [DonationController::class, 'webhook']);
 // APP_ENV is not production.
 $router->get ('/api/donation/sandbox', [DonationController::class, 'sandbox']);
 
-/* ---- account ------------------------------------------- PHASE 8 ----
+/* ---- account --------------------------------------------------------- */
+// 5 per user per hour. Changing a password is rare; anything faster is
+// somebody working through a list of guesses at the CURRENT one.
+$router->post('/api/user/password', [AccountController::class, 'changePassword'],
+              auth: true, limit: ['pwchange', 5, 3600, true]);
+
+/* ---- account deletion ---------------------------------- PHASE 8 ----
 $router->delete('/api/user/account', [AccountController::class, 'destroy'], auth: true);
 ------------------------------------------------------------------------ */
 
