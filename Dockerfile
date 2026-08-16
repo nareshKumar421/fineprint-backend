@@ -30,6 +30,22 @@ RUN set -eux; \
     docker-php-ext-install -j"$(nproc)" pdo_pgsql mbstring; \
     rm -rf /var/lib/apt/lists/*
 
+# ---- Exactly one MPM -----------------------------------------------
+# Apache refuses to start at all with "More than one MPM loaded", and
+# because the platform then restarts the container in a loop, the only
+# symptom from outside is a 502 — the logs are the sole place it shows.
+#
+# This image enables mpm_prefork, but an apt step that drags in the
+# distro apache2 package can enable mpm_event beside it, and which
+# happens depends on the mirror state at build time. So rather than
+# trusting the base image, disable every MPM and enable one explicitly.
+#
+# prefork specifically: php:8.3-apache runs PHP as mod_php, which is not
+# thread-safe and must not be paired with the threaded MPMs.
+RUN set -eux; \
+    a2dismod mpm_event mpm_worker mpm_prefork >/dev/null 2>&1 || true; \
+    a2enmod mpm_prefork
+
 # ---- Document root -------------------------------------------------
 # Only public/ is web-reachable. src/, db/, jobs/ and any .env sit one
 # level above it and can never be fetched over HTTP — the property the
@@ -53,6 +69,16 @@ RUN set -eux; \
       echo '</Directory>'; \
     } > /etc/apache2/conf-available/fineprint.conf; \
     a2enconf fineprint
+
+# Validate the config at BUILD time. A broken Apache config otherwise
+# produces an image that starts, fails, and is restarted forever, which
+# from outside is indistinguishable from a build that never happened —
+# both are a 502. Failing here names the problem in the build log.
+# ServerName is set first only to silence the unrelated FQDN warning.
+RUN set -eux; \
+    echo 'ServerName localhost' > /etc/apache2/conf-available/servername.conf; \
+    a2enconf servername; \
+    apache2ctl configtest
 
 # ---- Application ---------------------------------------------------
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
