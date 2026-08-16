@@ -1,0 +1,45 @@
+# ============================================================
+#  Keep the Render service awake.
+#
+#  Render's free tier stops the container after ~15 minutes with no
+#  traffic, and the next request pays a 30-50s cold start. The mobile
+#  app gives up after REQUEST_TIMEOUT_MS, so the first person to open
+#  the app after a quiet spell sees "The server took too long to
+#  respond." and a stale cached feed — the app looks broken when it is
+#  merely asleep. This was observed on a real device, not theorised.
+#
+#  Pinging every 10 minutes keeps it running. Render's free tier allows
+#  750 instance-hours a month and a month is ~730 hours, so staying
+#  awake fits — with very little to spare. If you add a second free
+#  service, this will push you over and one of them will be suspended.
+#
+#  GitHub's scheduler is best-effort and can lag by several minutes
+#  under load, which is why this runs at 10 and not at 14.
+# ============================================================
+name: keep-warm
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+# The health endpoint is public and returns no secrets, so this needs no
+# credentials at all.
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 \
+              https://fineprint-backend-gsgu.onrender.com/ || echo 000)
+            echo "attempt $attempt -> HTTP $code"
+            # 503 is the app's own answer when the database is unreachable.
+            # The container is awake, which is all this job exists to do.
+            if [ "$code" = "200" ] || [ "$code" = "503" ]; then exit 0; fi
+            sleep 15
+          done
+          echo "::warning::service did not respond after 3 attempts"
