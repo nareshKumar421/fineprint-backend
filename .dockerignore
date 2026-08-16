@@ -1,0 +1,35 @@
+# ============================================================
+#  What must NOT enter the image.
+#
+#  Railway builds from the git repo, where .env is already absent
+#  because .gitignore excludes it. This file matters for a LOCAL
+#  `docker build`, where the working directory does contain the real
+#  .env — COPY . . would bake the Neon password and Instamojo keys into
+#  an image layer, readable by anyone who pulls it.
+# ============================================================
+
+# Secrets — must never be copied, in any build context
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# Rebuilt inside the image by composer install; copying a host vendor/
+# would ship Linux-wrong binaries and mask a broken build
+vendor/
+
+# Not needed at runtime, and .git can be large
+.git/
+.gitignore
+tests/
+*.log
+/logs/
+/tmp/
+/backups/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
