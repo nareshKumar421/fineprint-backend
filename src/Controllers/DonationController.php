@@ -11,6 +11,19 @@
  *  2. ONLY THE WEBHOOK PROVES PAYMENT. What the app says and what the
  *     browser redirect says are both claims from an untrusted source. The
  *     webhook comes from Instamojo's server and carries a signature.
+ *
+ * PAYMENTS ARE CURRENTLY OFF
+ * --------------------------
+ * PAYMENTS_ENABLED=false in .env. While it is false, create() and the
+ * sandbox refuse, and info() tells the app to display a UPI id instead.
+ *
+ * The whole Instamojo path is left intact rather than deleted: turning it
+ * back on is one env value, and code that is deleted and re-added later
+ * is code that gets re-tested from scratch.
+ *
+ * webhook() is deliberately NOT gated. A payment made minutes before the
+ * switch was flipped still deserves to be recorded, and refusing it would
+ * make Instamojo retry a request that can never succeed.
  */
 
 declare(strict_types=1);
@@ -34,6 +47,18 @@ final class DonationController
     /** POST /api/donation/create */
     public function create(Request $request): void
     {
+        // Checked BEFORE auth-independent work and before any provider call,
+        // so a disabled provider can never be reached by any route through
+        // this method.
+        if (!self::paymentsEnabled()) {
+            throw new ApiException(
+                'PAYMENTS_DISABLED',
+                'Card payments are turned off at the moment. You can still support '
+                . 'the app by paying to the UPI id shown in the app.',
+                503
+            );
+        }
+
         $userId = $request->requireUserId();
         $amount = $this->amount($request);
 
@@ -45,7 +70,9 @@ final class DonationController
         // payment forever.
         $payment = $instamojo->createPaymentRequest(
             $amount,
-            'Support Blog Feed',
+            // Shown to the customer on Instamojo's own payment page, so it
+            // has to be the app's real name.
+            'Support FinePrint',
             $base . '/api/donation/webhook',
             $base . '/api/donation/thanks',
         );
@@ -73,6 +100,63 @@ final class DonationController
             'status'      => 'pending',
             'sandbox'     => $instamojo->isSandbox(),
         ], 201);
+    }
+
+    /**
+     * GET /api/donation/info
+     *
+     * What the Donate screen renders. No auth: it carries nothing private —
+     * a UPI id is published precisely so strangers can pay into it — and
+     * requiring a token would mean a logged-out user is told "session
+     * expired" when all they wanted was the way to donate.
+     *
+     * The app asks for this rather than hard-coding the UPI id, so the id
+     * can be corrected in .env without shipping a new build to the store.
+     * A wrong UPI id baked into an APK sends money to a stranger until
+     * every user updates.
+     */
+    public function info(Request $request): void
+    {
+        if (self::paymentsEnabled()) {
+            Response::json([
+                'method'      => 'gateway',
+                'provider'    => 'instamojo',
+                'min_amount'  => number_format(self::MIN_AMOUNT, 2, '.', ''),
+                'max_amount'  => number_format(self::MAX_AMOUNT, 2, '.', ''),
+            ]);
+            return;
+        }
+
+        $upiId = Env::get('DONATION_UPI_ID');
+
+        // Misconfiguration, not a user error: payments are off and no UPI id
+        // was set, so there is no way at all to donate. Say so plainly
+        // instead of rendering a screen with a blank id on it.
+        if ($upiId === '') {
+            error_log('PAYMENTS_ENABLED is false but DONATION_UPI_ID is empty — '
+                . 'the Donate screen has nothing to show.');
+            throw new ApiException('PAYMENTS_DISABLED',
+                'Donations are unavailable at the moment.', 503);
+        }
+
+        $payee = Env::get('DONATION_UPI_NAME', 'FinePrint');
+
+        Response::json([
+            'method'     => 'upi',
+            'upi_id'     => $upiId,
+            'payee_name' => $payee,
+
+            // A upi:// link opens the phone's UPI app with the payee already
+            // filled in. No amount is included: this is a donation, the
+            // payer chooses. Every value is urlencoded — an unencoded & or
+            // space in the payee name would truncate the link silently.
+            'upi_link'   => 'upi://pay?pa=' . rawurlencode($upiId)
+                          . '&pn=' . rawurlencode($payee)
+                          . '&cu=INR',
+
+            'note'       => 'Card payments are being set up. Until then you can '
+                          . 'send any amount to this UPI id — thank you.',
+        ]);
     }
 
     /** GET /api/donation/status?donation_id=N */
@@ -190,7 +274,7 @@ final class DonationController
     public function sandbox(Request $request): void
     {
         $instamojo = new InstamojoService();
-        if (!$instamojo->isSandbox()) {
+        if (!self::paymentsEnabled() || !$instamojo->isSandbox()) {
             throw new ApiException('NOT_FOUND', 'Unknown endpoint.', 404);
         }
 
@@ -239,6 +323,19 @@ final class DonationController
 
     /* ------------------------------------------------------------------ */
 
+    /**
+     * Is the payment gateway switched on?
+     *
+     * Anything other than an explicit true is false. A typo'd value must
+     * fail CLOSED — the failure mode of wrongly-on is taking money through
+     * a half-configured gateway, and of wrongly-off is a visible screen
+     * saying to use UPI.
+     */
+    private static function paymentsEnabled(): bool
+    {
+        return strtolower(trim(Env::get('PAYMENTS_ENABLED', 'false'))) === 'true';
+    }
+
     private function amount(Request $request): float
     {
         $raw = $request->input('amount');
@@ -281,7 +378,7 @@ final class DonationController
  .pay{background:#2563EB;color:#fff} .fail{background:#fff;color:#565B63;border:1px solid #E2E5E9}
 </style></head><body><div class="card">
  <span class="tag">SANDBOX — NO REAL MONEY</span>
- <h1>Support Blog Feed</h1>
+ <h1>Support FinePrint</h1>
  <p>Instamojo is not configured, so this stands in for their payment page. Both buttons
     send a correctly signed webhook, exactly as Instamojo would.</p>
  <div class="amt">₹{$a}</div>

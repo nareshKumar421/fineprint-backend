@@ -15,10 +15,17 @@ use App\Controllers\AuthController;
 use App\Controllers\DonationController;
 use App\Controllers\CategoryController;
 use App\Controllers\FeedController;
+use App\Controllers\HealthController;
 use App\Request;
 use App\Router;
 
 $router = new Router();
+
+/* ---- status -------------------------------------------------------- */
+// What uptime monitoring polls. No auth, no rate limit: a limiter would
+// throttle the monitor itself and report an outage that is not happening.
+// Returns 503, not 200, when the database is unreachable.
+$router->get('/', [HealthController::class, 'index']);
 
 /* ---- auth ---------------------------------------------------------- */
 // 5 attempts per IP per minute on the two endpoints worth brute-forcing.
@@ -41,6 +48,10 @@ $router->post('/api/donation/create',  [DonationController::class, 'create'],
               auth: true, limit: ['donate', 10, 3600, true]);
 $router->get ('/api/donation/status',  [DonationController::class, 'status'], auth: true);
 
+// How to donate — gateway or UPI. No auth: it holds nothing private, and
+// the Donate screen must render even if a token has just expired.
+$router->get ('/api/donation/info',    [DonationController::class, 'info']);
+
 // No auth: Instamojo's server calls this and the SIGNATURE is the auth.
 $router->post('/api/donation/webhook', [DonationController::class, 'webhook']);
 
@@ -51,6 +62,9 @@ $router->get ('/api/donation/sandbox', [DonationController::class, 'sandbox']);
 /* ---- account --------------------------------------------------------- */
 // 5 per user per hour. Changing a password is rare; anything faster is
 // somebody working through a list of guesses at the CURRENT one.
+$router->get ('/api/user/profile',  [AccountController::class, 'profile'],       auth: true);
+$router->post('/api/user/profile',  [AccountController::class, 'updateProfile'], auth: true);
+
 $router->post('/api/user/password', [AccountController::class, 'changePassword'],
               auth: true, limit: ['pwchange', 5, 3600, true]);
 

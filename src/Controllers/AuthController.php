@@ -56,7 +56,7 @@ final class AuthController
         // Registration returns a token, so there is no separate login step.
         Response::json([
             'token'      => $token['token'],
-            'user'       => ['id' => $userId, 'email' => $email],
+            'user'       => ['id' => $userId, 'email' => $email, 'display_name' => null],
             'expires_at' => $token['expires_at'],
         ], 201);
     }
@@ -67,7 +67,7 @@ final class AuthController
 
         // LOWER(email) so the query can use users_email_lower_uniq.
         $user = Db::one(
-            'SELECT id, password_hash, is_active FROM users WHERE LOWER(email) = LOWER(?)',
+            'SELECT id, password_hash, is_active, display_name FROM users WHERE LOWER(email) = LOWER(?)',
             [$email]
         );
 
@@ -93,7 +93,11 @@ final class AuthController
 
         Response::json([
             'token'      => $token['token'],
-            'user'       => ['id' => $userId, 'email' => $email],
+            'user'       => [
+                'id'           => $userId,
+                'email'        => $email,
+                'display_name' => $user['display_name'],
+            ],
             'expires_at' => $token['expires_at'],
         ], 200);
     }

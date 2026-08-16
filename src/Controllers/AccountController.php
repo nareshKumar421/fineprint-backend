@@ -16,6 +16,66 @@ final class AccountController
 {
     private const MIN_PASSWORD = 8;
     private const MAX_PASSWORD = 200;
+    private const MAX_NAME     = 80;
+
+    /**
+     * GET /api/user/profile
+     *
+     * The app calls this on launch. It doubles as a token check: a stale
+     * token 401s here and the client logs itself out, rather than the user
+     * discovering it later on some unrelated screen.
+     */
+    public function profile(Request $request): void
+    {
+        $userId = $request->requireUserId();
+
+        $row = Db::one('SELECT id, email, display_name FROM users WHERE id = ?', [$userId]);
+        if ($row === null) {
+            throw new ApiException('TOKEN_INVALID', 'Please log in again.', 401);
+        }
+
+        Response::json([
+            'id'           => (int) $row['id'],
+            'email'        => $row['email'],
+            'display_name' => $row['display_name'],
+        ]);
+    }
+
+    /**
+     * POST /api/user/profile — set or clear the display name.
+     *
+     * An empty string is stored as NULL. Two values that mean "not set" but
+     * behave differently in queries is a bug waiting to happen.
+     */
+    public function updateProfile(Request $request): void
+    {
+        $userId = $request->requireUserId();
+        $raw    = $request->input('display_name');
+
+        if ($raw !== null && !is_string($raw)) {
+            throw new ApiException('VALIDATION_ERROR', 'Name must be text.', 400);
+        }
+
+        $name = $raw === null ? null : trim($raw);
+
+        if ($name !== null && $name !== '') {
+            if (mb_strlen($name) > self::MAX_NAME) {
+                throw new ApiException('VALIDATION_ERROR',
+                    'Name must be ' . self::MAX_NAME . ' characters or fewer.', 400);
+            }
+            // Control characters would let someone put line breaks or
+            // right-to-left overrides into a name that other people see.
+            if (preg_match('/[\x00-\x1F\x7F]/u', $name)) {
+                throw new ApiException('VALIDATION_ERROR', 'That name contains invalid characters.', 400);
+            }
+        }
+
+        $store = ($name === null || $name === '') ? null : $name;
+
+        Db::exec('UPDATE users SET display_name = ? WHERE id = ?', [$store, $userId]);
+
+        Response::json(['success' => true, 'display_name' => $store]);
+    }
 
     /**
      * POST /api/user/password

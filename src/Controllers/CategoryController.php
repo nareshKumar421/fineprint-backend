@@ -26,7 +26,7 @@ final class CategoryController
     public function list(Request $request): void
     {
         $rows = Db::all(
-            'SELECT id, name, slug, description, icon_name
+            'SELECT id, name, slug, description, icon
                FROM category_master
               WHERE is_active = true
               ORDER BY display_order ASC, name ASC'
@@ -38,7 +38,10 @@ final class CategoryController
                 'name'        => $r['name'],
                 'slug'        => $r['slug'],
                 'description' => $r['description'],
-                'icon_name'   => $r['icon_name'],
+                // The glyph itself. The app draws it as-is and keeps no map
+                // of its own, so adding an icon never needs an app release.
+                // null is a real answer and means "no icon".
+                'icon'        => $r['icon'],
             ], $rows),
         ]);
     }

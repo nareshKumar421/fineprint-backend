@@ -13,6 +13,12 @@ CREATE TABLE category_master (
     name          VARCHAR(100) NOT NULL,
     slug          VARCHAR(100) NOT NULL UNIQUE,
     description   TEXT,
+    -- The glyph itself, not a name for one. The app renders this as-is and
+    -- holds no list of known icons, so a new category is a pure INSERT and
+    -- never needs an app release. NULL means "no icon" and is fine.
+    icon          VARCHAR(8),
+    -- Superseded by icon (migration 004). Nothing reads it; kept until a
+    -- later migration drops it.
     icon_name     VARCHAR(50),
     display_order INT          NOT NULL DEFAULT 0,
     is_active     BOOLEAN      NOT NULL DEFAULT true,
