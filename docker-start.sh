@@ -14,6 +14,32 @@ set -eu
 
 PORT="${PORT:-8080}"
 
+# ---- Exactly one MPM, enforced at RUN time --------------------------
+# The Dockerfile already pins mpm_prefork and the build runs
+# `apache2ctl configtest`, which passes. Despite that, the deployed
+# container still died on "More than one MPM loaded" — so the image the
+# platform runs does not always match the one the build validated.
+#
+# Rather than keep guessing at why, fix it where it actually matters: on
+# the way up, every time. This is idempotent and costs a few
+# milliseconds. The echo is deliberate — the MPM list is the one piece of
+# evidence that says whether the theory was right, and a container that
+# dies before Apache starts writes nothing else to the log.
+for extra in mpm_event mpm_worker; do
+    if [ -e "/etc/apache2/mods-enabled/${extra}.load" ]; then
+        echo "start.sh: found extra MPM ${extra} — disabling"
+        a2dismod "${extra}" >/dev/null 2>&1 || true
+    fi
+done
+
+if [ ! -e /etc/apache2/mods-enabled/mpm_prefork.load ]; then
+    echo "start.sh: mpm_prefork missing — enabling"
+    a2enmod mpm_prefork >/dev/null 2>&1 || true
+fi
+
+echo "start.sh: MPMs enabled -> $(ls /etc/apache2/mods-enabled/ 2>/dev/null | grep -E '^mpm_.*\.load$' | tr '\n' ' ')"
+echo "start.sh: PORT=${PORT}"
+
 # Listen on IPv6 where it exists, NOT the bare `Listen <port>` Apache
 # defaults to.
 #
