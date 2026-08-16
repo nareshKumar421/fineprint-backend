@@ -46,6 +46,29 @@ RUN set -eux; \
     a2dismod mpm_event mpm_worker mpm_prefork >/dev/null 2>&1 || true; \
     a2enmod mpm_prefork
 
+# ---- Bound the worker count ----------------------------------------
+# Db.php opens one PostgreSQL connection per request, and we connect to
+# Neon DIRECTLY rather than through its pooler — the pooler silently
+# discards explicit transactions when PDO uses server-side prepared
+# statements, which made every category save, donation and password
+# change report success and write nothing.
+#
+# Without the pooler in front, Apache's worker count IS the connection
+# count. Prefork defaults to 150, which would exhaust Neon's connection
+# limit under load and turn a traffic spike into "Database unavailable".
+# 16 is far more than this app's traffic needs and stays well inside it.
+RUN set -eux; \
+    { \
+      echo '<IfModule mpm_prefork_module>'; \
+      echo '    StartServers             2'; \
+      echo '    MinSpareServers          2'; \
+      echo '    MaxSpareServers          5'; \
+      echo '    MaxRequestWorkers       16'; \
+      echo '    MaxConnectionsPerChild 500'; \
+      echo '</IfModule>'; \
+    } > /etc/apache2/conf-available/fineprint-mpm.conf; \
+    a2enconf fineprint-mpm
+
 # ---- Document root -------------------------------------------------
 # Only public/ is web-reachable. src/, db/, jobs/ and any .env sit one
 # level above it and can never be fetched over HTTP — the property the
