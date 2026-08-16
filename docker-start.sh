@@ -14,7 +14,28 @@ set -eu
 
 PORT="${PORT:-8080}"
 
-sed -ri "s/^Listen [0-9]+\$/Listen ${PORT}/" /etc/apache2/ports.conf
+# Listen on IPv6 where it exists, NOT the bare `Listen <port>` Apache
+# defaults to.
+#
+# `Listen 8080` binds 0.0.0.0 only — IPv4. Railway's internal network is
+# IPv6, so its edge cannot open a connection to an IPv4-only socket and
+# answers "Application failed to respond" with x-railway-fallback: true,
+# even though the container is healthy and Apache is running.
+#
+# A [::] socket serves BOTH families when bindv6only=0, which is the
+# Linux default and true on Railway, so this covers IPv4 as well rather
+# than trading one family for the other. Binding both explicitly would
+# risk "Address already in use" against that same dual-stack socket.
+#
+# The guard keeps the image runnable where IPv6 is genuinely absent —
+# Apache exits rather than starts degraded if it cannot bind.
+if [ -f /proc/net/if_inet6 ]; then
+    LISTEN="Listen [::]:${PORT}"
+else
+    LISTEN="Listen ${PORT}"
+fi
+
+printf '%s\n' "${LISTEN}" > /etc/apache2/ports.conf
 sed -ri "s/<VirtualHost \*:[0-9]+>/<VirtualHost *:${PORT}>/" \
     /etc/apache2/sites-available/000-default.conf
 
