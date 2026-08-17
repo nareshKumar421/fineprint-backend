@@ -97,12 +97,72 @@ function save_articles(PDO $db, array $items, int $blogId, int $categoryId): int
 
 $startedAt = time();
 
-try {
-    $db = new PDO($DB_DSN, $DB_USER, $DB_PASS, [
+/**
+ * Is this exception the database connection having gone away?
+ *
+ * Managed Postgres (Neon and friends) drops long-lived connections, and this
+ * job holds one for its whole run — 77 feeds at a few seconds each is several
+ * minutes of wall clock, most of it spent waiting on HTTP rather than talking
+ * to the database. An idle connection in that window is exactly what gets
+ * reaped.
+ *
+ * Matching on the message is unpleasant, but pdo_pgsql reports every one of
+ * these as SQLSTATE HY000, so the code cannot distinguish them.
+ */
+function db_connection_lost(Throwable $e): bool
+{
+    return (bool) preg_match(
+        '/server closed the connection|no connection to the server|'
+        . 'connection not open|SSL connection has been closed|broken pipe/i',
+        $e->getMessage()
+    );
+}
+
+function db_open(string $dsn, string $user, string $pass): PDO
+{
+    /*
+     * Keepalives and timeouts, or a dropped connection HANGS the job.
+     *
+     * Detecting the drop is not enough. Most of this job's wall clock is
+     * spent on HTTP, so the database socket sits idle for long stretches and
+     * anything doing NAT in the path silently discards it. The next query
+     * then blocks on a socket nobody will ever answer, and with no timeout
+     * set that is the OS TCP retry limit — many minutes. Observed: the run
+     * sat completely silent for 16 minutes before it was killed.
+     *
+     *   keepalives    make the kernel notice a dead peer in ~1 minute rather
+     *                 than waiting for a write to fail
+     *   connect_timeout  bounds the reconnect attempt itself
+     *   statement_timeout  bounds any single query server-side
+     *
+     * These are libpq keywords and are appended only if the DSN does not
+     * already set them, so an operator can still override any of them.
+     */
+    $extra = [
+        'connect_timeout'     => '10',
+        'keepalives'          => '1',
+        'keepalives_idle'     => '30',
+        'keepalives_interval' => '10',
+        'keepalives_count'    => '3',
+        'options'             => "'-c statement_timeout=30000'",
+    ];
+
+    foreach ($extra as $key => $value) {
+        if (!str_contains($dsn, $key . '=')) {
+            $dsn = rtrim($dsn, ';') . ';' . $key . '=' . $value;
+        }
+    }
+
+    return new PDO($dsn, $user, $pass, [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
+        PDO::ATTR_TIMEOUT            => 15,
     ]);
+}
+
+try {
+    $db = db_open($DB_DSN, $DB_USER, $DB_PASS);
 } catch (PDOException $e) {
     logline('FATAL', 'cannot connect to database: ' . $e->getMessage());
     exit(1);
@@ -134,27 +194,66 @@ $totalNew  = 0;
 $okCount   = 0;
 $failCount = 0;
 
-$markOk = $db->prepare(
-    'UPDATE blog_sources
-        SET last_fetched_at = NOW(), failure_count = 0, last_error = NULL
-      WHERE id = :id'
-);
+/*
+ * Prepared statements belong to a connection and die with it, so they are
+ * built here and rebuilt after every reconnect rather than once at startup.
+ */
+$markOk = $markFail = $updateUrl = null;
 
-// Note the duplicated :n / :n2 placeholders. With EMULATE_PREPARES off, a
-// named parameter cannot be reused within one statement.
-$markFail = $db->prepare(
-    'UPDATE blog_sources
-        SET failure_count   = :n,
-            last_error      = :err,
-            last_fetched_at = NOW(),
-            is_active       = CASE WHEN :n2 >= :max THEN false ELSE is_active END
-      WHERE id = :id'
-);
+$prepareStatements = static function (PDO $db) use (&$markOk, &$markFail, &$updateUrl): void {
+    $markOk = $db->prepare(
+        'UPDATE blog_sources
+            SET last_fetched_at = NOW(), failure_count = 0, last_error = NULL
+          WHERE id = :id'
+    );
 
-$updateUrl = $db->prepare('UPDATE blog_sources SET feed_url = :url WHERE id = :id');
+    // Note the duplicated :n / :n2 placeholders. With EMULATE_PREPARES off, a
+    // named parameter cannot be reused within one statement.
+    $markFail = $db->prepare(
+        'UPDATE blog_sources
+            SET failure_count   = :n,
+                last_error      = :err,
+                last_fetched_at = NOW(),
+                is_active       = CASE WHEN :n2 >= :max THEN false ELSE is_active END
+          WHERE id = :id'
+    );
+
+    $updateUrl = $db->prepare('UPDATE blog_sources SET feed_url = :url WHERE id = :id');
+};
+
+$prepareStatements($db);
+
+/**
+ * Reopen the connection and rebuild the statements bound to it.
+ *
+ * Returns false if the database is genuinely unreachable rather than merely
+ * having dropped us, so the caller can stop instead of looping.
+ */
+$reconnect = static function () use (&$db, $DB_DSN, $DB_USER, $DB_PASS, $prepareStatements): bool {
+    for ($try = 1; $try <= 3; $try++) {
+        try {
+            $db = db_open($DB_DSN, $DB_USER, $DB_PASS);
+            $prepareStatements($db);
+            logline('INFO', "reconnected to database (attempt {$try})");
+            return true;
+        } catch (Throwable $e) {
+            // Managed Postgres that has scaled to zero needs a moment to wake.
+            sleep($try * 2);
+        }
+    }
+    return false;
+};
+
+$connectionDead = false;
 
 foreach ($rows as $row) {
-    $label = "{$row['blog_name']} (cat {$row['category_id']})";
+    $label   = "{$row['blog_name']} (cat {$row['category_id']})";
+    $retried = 0;
+
+    // Jump target for the one reconnect-and-retry in the catch below. A goto
+    // rather than a nested attempt loop so the body keeps its indentation and
+    // the diff stays readable; this is the retry case goto exists for.
+    retry_feed:
 
     try {
         $res    = feed_fetch($row['feed_url']);
@@ -188,6 +287,27 @@ foreach ($rows as $row) {
         logline('OK', sprintf('%-40s %2d found, %2d new', $label, count($parsed['items']), $new));
 
     } catch (Throwable $e) {
+        /*
+         * The connection going away is not this blog's fault, and must not be
+         * recorded against it. Without this the run dies here: marking the
+         * failure needs the very connection that just vanished, so the catch
+         * block throws too and the whole job aborts partway through — which is
+         * how a 77-feed run was ending after 10 feeds.
+         *
+         * Reconnect and retry the same feed once. $retried keeps a database
+         * that is genuinely down from looping forever.
+         */
+        if (db_connection_lost($e) && $retried < 3) {
+            logline('WARN', sprintf('%-40s database connection lost - reconnecting', $label));
+            if ($reconnect()) {
+                $retried++;
+                goto retry_feed;
+            }
+            logline('FATAL', 'database unreachable after reconnect attempts - stopping');
+            $connectionDead = true;
+            break;
+        }
+
         // One bad blog must never stop the other forty.
         $failCount++;
         $fails = ((int) $row['failure_count']) + 1;
@@ -195,13 +315,33 @@ foreach ($rows as $row) {
         // DEFECT 2: record last_error. The column existed and the admin query
         // in docs/02 §8 selects it, but the original never wrote it — so every
         // failure diagnosis meant digging through log files.
-        $markFail->execute([
-            ':n'   => $fails,
-            ':err' => mb_substr($e->getMessage(), 0, 500, 'UTF-8'),
-            ':n2'  => $fails,
-            ':max' => $MAX_FAILURES,
-            ':id'  => $row['blog_id'],
-        ]);
+        // Recording the failure must not itself be able to kill the run. If
+        // the connection died between the throw and here, reconnect once and
+        // write it; if even that fails, the log line below is still emitted
+        // and the next blog gets its turn.
+        try {
+            $markFail->execute([
+                ':n'   => $fails,
+                ':err' => mb_substr($e->getMessage(), 0, 500, 'UTF-8'),
+                ':n2'  => $fails,
+                ':max' => $MAX_FAILURES,
+                ':id'  => $row['blog_id'],
+            ]);
+        } catch (Throwable $inner) {
+            if (db_connection_lost($inner) && $reconnect()) {
+                try {
+                    $markFail->execute([
+                        ':n'   => $fails,
+                        ':err' => mb_substr($e->getMessage(), 0, 500, 'UTF-8'),
+                        ':n2'  => $fails,
+                        ':max' => $MAX_FAILURES,
+                        ':id'  => $row['blog_id'],
+                    ]);
+                } catch (Throwable) {
+                    logline('WARN', 'could not record failure for ' . $label);
+                }
+            }
+        }
 
         logline('WARN', sprintf('%-40s %s (failure %d/%d)',
                 $label, $e->getMessage(), $fails, $MAX_FAILURES));
@@ -220,6 +360,20 @@ foreach ($rows as $row) {
  * original comparison silently never deleted an undated article and they
  * accumulated forever.
  */
+/*
+ * Both statements below need a live connection. If the loop gave up because
+ * the database went away, one last reconnect is worth trying: the articles
+ * already fetched are safely committed, and without this the run leaves no
+ * sync_status row — which is what makes the health endpoint report a stale
+ * last_sync_at even though fresh content did arrive.
+ */
+if ($connectionDead && !$reconnect()) {
+    logline('FATAL', 'database unreachable - skipping housekeeping and sync_status');
+    logline('INFO', sprintf('partial run: %d ok, %d failed, %d new articles, %ds',
+            $okCount, $failCount, $totalNew, time() - $startedAt));
+    exit(2);
+}
+
 $purged = $db->exec(
     "DELETE FROM articles
       WHERE COALESCE(published_at, fetched_at) < NOW() - INTERVAL '60 days'"
