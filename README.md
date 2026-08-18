@@ -38,6 +38,8 @@ psql "$FEED_DB_URL" -f db/schema.sql
 psql "$FEED_DB_URL" -f db/seed_categories.sql
 psql "$FEED_DB_URL" -f db/002_rate_limits.sql
 psql "$FEED_DB_URL" -f db/007_feed_scoring.sql
+# 008 creates the CI role; pass a password you generate, and never commit it
+psql "$FEED_DB_URL" -v pw="$(openssl rand -base64 24)" -f db/008_ci_role.sql
 ```
 
 Requires `php-pgsql`. Without it `new PDO('pgsql:...')` fails immediately and
@@ -56,8 +58,12 @@ Production is nginx + PHP-FPM with the root at `public/`.
 ```bash
 php jobs/fetch_feeds.php          # collects articles; safe to run repeatedly
 php jobs/rollup_stats.php         # rebuilds the feed's ranking stats
+php jobs/pipeline_report.php      # what the pipeline achieved; read-only
 php jobs/find_feed.php <url>      # validates a blog's feed, prints SQL
 ```
+
+On the managed deployment these run from GitHub Actions, not cron — see
+`.github/workflows/nightly-jobs.yml`. On a server with real cron:
 
 ```cron
 0  3 * * * /usr/bin/php /var/www/blogfeed/backend/jobs/fetch_feeds.php  >> /var/log/feedjob.log 2>&1

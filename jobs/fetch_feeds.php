@@ -35,6 +35,7 @@ $DB_PASS = feed_env('FEED_DB_PASS');
 $MAX_FAILURES = (int) feed_env('FEED_MAX_FAILURES', '5');
 $SLEEP_US     = 500_000;      // half a second between blogs — be polite
 
+
 if ($DB_DSN === '' || $DB_USER === '') {
     fwrite(STDERR, "FATAL: FEED_DB_DSN / FEED_DB_USER not set. Is backend/.env present?\n");
     exit(1);
@@ -49,47 +50,6 @@ function logline(string $level, string $msg): void
 /*  Save                                                               */
 /* ------------------------------------------------------------------ */
 
-/**
- * Relies on the unique index for deduplication:
- *   CREATE UNIQUE INDEX articles_guid_cat_uniq ON articles (guid, category_id);
- *
- * ON CONFLICT DO NOTHING means a repeat guid is silently skipped, with no
- * race condition even if two runs overlap. First insert wins — an edited
- * headline upstream does not overwrite what we stored.
- *
- * DEFECT 4: image_url and author are now stored. The original parser never
- * extracted them, so every card would have rendered without a thumbnail.
- */
-function save_articles(PDO $db, array $items, int $blogId, int $categoryId): int
-{
-    $sql = 'INSERT INTO articles
-              (guid, title, excerpt, article_url, image_url, author,
-               published_at, blog_source_id, category_id, fetched_at)
-            VALUES
-              (:guid, :title, :excerpt, :url, :image_url, :author,
-               :published_at, :blog_id, :category_id, NOW())
-            ON CONFLICT (guid, category_id) DO NOTHING';
-
-    $stmt     = $db->prepare($sql);
-    $inserted = 0;
-
-    foreach ($items as $it) {
-        $stmt->execute([
-            ':guid'         => $it['guid'],
-            ':title'        => $it['title'],
-            ':excerpt'      => $it['excerpt'],
-            ':url'          => $it['url'],
-            ':image_url'    => $it['image_url'],
-            ':author'       => $it['author'],
-            ':published_at' => $it['published_at'],
-            ':blog_id'      => $blogId,
-            ':category_id'  => $categoryId,
-        ]);
-        $inserted += $stmt->rowCount();   // 0 when the row already existed
-    }
-
-    return $inserted;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Main                                                               */
@@ -263,7 +223,8 @@ foreach ($rows as $row) {
         // the caller recorded as SUCCESS: failure_count reset to 0, the blog
         // never deactivated, nobody ever alerted. See docs/05 §2.
         $parsed = feed_parse($res['body']);
-        $new    = save_articles($db, $parsed['items'], (int) $row['blog_id'], (int) $row['category_id']);
+        $saved  = save_articles($db, $parsed['items'], (int) $row['blog_id'], (int) $row['category_id']);
+        $new    = $saved['inserted'];
 
         $markOk->execute([':id' => $row['blog_id']]);
 
@@ -284,7 +245,9 @@ foreach ($rows as $row) {
 
         $totalNew += $new;
         $okCount++;
-        logline('OK', sprintf('%-40s %2d found, %2d new', $label, count($parsed['items']), $new));
+        logline('OK', sprintf('%-40s %2d found, %2d new%s',
+                $label, count($parsed['items']), $new,
+                $saved['too_old'] > 0 ? sprintf(', %d older than %d days', $saved['too_old'], RETENTION_DAYS) : ''));
 
     } catch (Throwable $e) {
         /*
@@ -376,7 +339,7 @@ if ($connectionDead && !$reconnect()) {
 
 $purged = $db->exec(
     "DELETE FROM articles
-      WHERE COALESCE(published_at, fetched_at) < NOW() - INTERVAL '60 days'"
+      WHERE COALESCE(published_at, fetched_at) < NOW() - INTERVAL '" . RETENTION_DAYS . " days'"
 );
 
 $db->prepare(

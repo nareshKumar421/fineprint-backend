@@ -211,24 +211,40 @@ curl -6 -s -o /dev/null -w '%{time_total}\n' https://host/
 
 ---
 
-## 6. Two open gaps
+## 6. Scheduled work, and one open gap
 
-### The feed fetch job is not running
+### The nightly pipeline — CLOSED
 
-Nothing runs `jobs/fetch_feeds.php` in the current deployment. Content is
-frozen at whatever was last ingested, and `last_sync_at` on the health
-endpoint stops moving. Confirm with:
+`.github/workflows/nightly-jobs.yml` runs at **03:10 UTC**:
+
+1. `jobs/fetch_feeds.php` — collect articles
+2. `jobs/rollup_stats.php` — rebuild the feed's ranking stats
+3. `db/cleanup.sql` — retention
+4. `jobs/pipeline_report.php` — what actually happened
+
+GitHub Actions rather than a Render Cron Job, which is paid, and the
+account's 750 instance-hours are already nearly spent on keep-warm.
+
+It logs in as **`fineprint_ci`**, not `neondb_owner` — see
+[db/008_ci_role.sql](../db/008_ci_role.sql). This repository is public, so
+its Actions secrets hold a credential that cannot read password hashes or
+emails, cannot touch donations, cannot delete users and cannot run DDL. If it
+leaks, `DROP ROLE fineprint_ci` ends it and the application is unaffected.
+
+Four repository secrets are required: `FEED_DB_DSN`, `FEED_DB_USER`,
+`FEED_DB_PASS`, `FEED_DB_URL`. The workflow fails on its first step with a
+named error if any is missing, rather than surfacing it later as a confusing
+"cannot connect to database".
+
+Check it worked:
 
 ```bash
+gh run list --workflow nightly-jobs --limit 5
 curl -s https://fineprint-backend-gsgu.onrender.com/ | grep -o '"last_sync_at":"[^"]*"'
+php jobs/pipeline_report.php        # locally, against the same database
 ```
 
-Render's free plan has no cron. The options are a paid Render Cron Job, a
-scheduled GitHub Actions workflow that runs the PHP job against the same
-database (needs the Neon credentials as repository secrets), or any host
-that gives you real cron — see [dedicated-server.md](dedicated-server.md).
-
-### Free-tier sleep
+### Still open: free-tier sleep
 
 Render's free plan stops the container after ~15 minutes idle, and the next
 request pays a 30–50s cold start. The app gives up after

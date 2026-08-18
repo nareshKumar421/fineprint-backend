@@ -1,0 +1,106 @@
+# ============================================================
+#  The nightly content pipeline.
+#
+#  Two jobs that MUST run in this order:
+#
+#    1. fetch_feeds.php   collects new articles from 77 feeds
+#    2. rollup_stats.php  turns interaction events into the numbers the
+#                         feed ranks on
+#
+#  Why GitHub Actions and not Render: Render's free plan has no cron, and
+#  the account's 750 instance-hours are already nearly spent keeping the
+#  service awake (see keep-warm.yml) — a second free service would push it
+#  over and something would be suspended.
+#
+#  WITHOUT THIS WORKFLOW the feed still works but stops learning.
+#  user_feed_stats stays empty, nobody crosses the 50-impression threshold,
+#  and every reader is served the cold-start formula forever. Events keep
+#  accumulating, so the first run after an outage picks up the backlog.
+#
+#  Both jobs are safe to run repeatedly. Articles deduplicate on
+#  (guid, category_id); the rollups are a full rebuild inside one
+#  transaction. Running twice costs bandwidth, never correctness.
+# ============================================================
+name: nightly-jobs
+
+on:
+  schedule:
+    # 03:10 UTC. Deliberately not on the hour: GitHub's scheduler is
+    # best-effort and its queues are longest at :00.
+    - cron: '10 3 * * *'
+  workflow_dispatch:
+
+# A run can take several minutes. Never let a delayed run overlap the next
+# one — two concurrent fetches would double the outbound requests to every
+# publisher we pull from.
+concurrency:
+  group: nightly-jobs
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      FEED_DB_DSN:  ${{ secrets.FEED_DB_DSN }}
+      FEED_DB_USER: ${{ secrets.FEED_DB_USER }}
+      FEED_DB_PASS: ${{ secrets.FEED_DB_PASS }}
+      # The same database in libpq URL form, for psql. The PHP jobs cannot
+      # use this and psql cannot use the PDO DSN, so both are needed.
+      FEED_DB_URL:  ${{ secrets.FEED_DB_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # pdo_pgsql is the one that matters: without it `new PDO('pgsql:…')`
+          # fails immediately and nothing else in the job can run.
+          extensions: pdo_pgsql, pgsql, mbstring, curl, simplexml, dom
+
+      - name: Check credentials are present
+        run: |
+          # Fail loudly and early. Without this the PHP job reports
+          # "cannot connect to database", which reads like an outage rather
+          # than a missing repository secret.
+          missing=""
+          [ -n "$FEED_DB_DSN"  ] || missing="$missing FEED_DB_DSN"
+          [ -n "$FEED_DB_USER" ] || missing="$missing FEED_DB_USER"
+          [ -n "$FEED_DB_PASS" ] || missing="$missing FEED_DB_PASS"
+          [ -n "$FEED_DB_URL"  ] || missing="$missing FEED_DB_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "credentials present"
+
+      - name: Collect articles
+        # Exit 2 means "at least one feed failed", which is normal and must
+        # not fail the workflow — one dead blog should never stop the rollup
+        # that every other blog's ranking depends on. Exit 1 is fatal and is
+        # still surfaced, as a warning, by the report step below.
+        run: php jobs/fetch_feeds.php || true
+
+      - name: Rebuild ranking stats
+        run: php jobs/rollup_stats.php
+
+      - name: Housekeeping
+        run: |
+          # Retention. The fetch job purges articles itself; this covers the
+          # other tables, of which article_events grows fastest — it gains a
+          # row per card that appears on a screen.
+          #
+          # psql rather than PHP because cleanup.sql ends in VACUUM, and
+          # VACUUM cannot run inside the implicit transaction that a
+          # multi-statement PDO::exec() creates.
+          psql "$FEED_DB_URL" -v ON_ERROR_STOP=1 -f db/cleanup.sql
+
+      - name: Report
+        if: always()
+        run: php jobs/pipeline_report.php

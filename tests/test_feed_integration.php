@@ -23,6 +23,11 @@ use App\Services\EventService;
 use App\Services\FeedService;
 use App\Services\Scoring;
 
+// save_articles() lives in the cron job, not the app, so it is pulled in
+// directly. feedlib.php is already required by fetch_feeds.php; requiring the
+// job itself would RUN it.
+require_once __DIR__ . '/../jobs/feedlib.php';
+
 $pass = 0;
 $fail = 0;
 
@@ -323,6 +328,56 @@ try {
 
     assert_true('a narrow pool still fills the page via refill', count($narrow) === 20,
         count($narrow) . " articles from $narrowSources source(s)");
+
+    /* ---- the fetch job's insert path ------------------------------ */
+    echo "\narticle ingestion\n";
+
+    /*
+     * save_articles() batches its INSERTs and drops anything the 60-day purge
+     * would delete moments later. Both behaviours are checked here because
+     * neither is visible from the outside: the old version inserted expired
+     * articles and deleted them in the same run, reporting "2446 added" into
+     * a table that held 1740.
+     */
+    $blogId = (int) Db::scalar('SELECT id FROM blog_sources ORDER BY id LIMIT 1');
+    $catId  = $loved;
+    $stamp  = bin2hex(random_bytes(6));
+
+    $mk = static fn(string $key, ?string $publishedAt): array => [
+        'guid'         => "test-$key",
+        'title'        => "Test article $key",
+        'excerpt'      => 'An excerpt long enough to be a real summary rather than a stub.',
+        'url'          => "https://example.invalid/$key",
+        'image_url'    => null,
+        'author'       => null,
+        'published_at' => $publishedAt,
+    ];
+
+    $items = [
+        $mk("$stamp-fresh1", gmdate('Y-m-d H:i:s', time() - 3600)),
+        $mk("$stamp-fresh2", gmdate('Y-m-d H:i:s', time() - 86400)),
+        $mk("$stamp-old1",   gmdate('Y-m-d H:i:s', time() - 90 * 86400)),
+        $mk("$stamp-old2",   gmdate('Y-m-d H:i:s', time() - 400 * 86400)),
+        $mk("$stamp-undated", null),
+    ];
+    // A feed that lists the same guid twice — one statement cannot insert the
+    // same conflicting row twice, so this must be collapsed before the INSERT.
+    $items[] = $mk("$stamp-fresh1", gmdate('Y-m-d H:i:s', time() - 3600));
+
+    $saved = save_articles(Db::conn(), $items, $blogId, $catId);
+
+    assert_true('articles past the retention window are never inserted',
+        $saved['too_old'] === 2, "skipped {$saved['too_old']} of 2");
+    assert_true('fresh and undated articles are inserted once each',
+        $saved['inserted'] === 3, "inserted {$saved['inserted']} (2 fresh + 1 undated)");
+
+    // Re-running the job must add nothing — the unique index is what makes it
+    // safe to run more often than scheduled.
+    $again = save_articles(Db::conn(), $items, $blogId, $catId);
+    assert_true('a repeat run inserts nothing', $again['inserted'] === 0,
+        "inserted {$again['inserted']}");
+
+    Db::exec("DELETE FROM articles WHERE guid LIKE ?", ["test-$stamp%"]);
 
 } finally {
     if ($userId !== null) {

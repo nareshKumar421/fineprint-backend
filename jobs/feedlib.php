@@ -15,6 +15,12 @@ declare(strict_types=1);
 const FEED_EXCERPT_DEFAULT = 200;
 const FEED_TIMEOUT_DEFAULT = 15;
 
+/** Article retention. Kept in step with db/cleanup.sql. */
+const RETENTION_DAYS = 60;
+
+/** Rows per INSERT statement. Each statement is one network round trip. */
+const INSERT_CHUNK = 100;
+
 /* ------------------------------------------------------------------ */
 /*  Environment                                                        */
 /* ------------------------------------------------------------------ */
@@ -383,4 +389,98 @@ function feed_parse(string $xmlString): array
         'items'     => $items,
         'malformed' => $libErrors !== [],
     ];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Storage                                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * save_articles() lives HERE rather than in fetch_feeds.php so that
+ * tests/test_feed_integration.php can call it. Requiring the job file to
+ * reach the function would run the entire job as a side effect — 77 outbound
+ * feed requests from a test suite.
+ */
+
+/**
+ * Relies on the unique index for deduplication:
+ *   CREATE UNIQUE INDEX articles_guid_cat_uniq ON articles (guid, category_id);
+ *
+ * ON CONFLICT DO NOTHING means a repeat guid is silently skipped, with no
+ * race condition even if two runs overlap. First insert wins — an edited
+ * headline upstream does not overwrite what we stored.
+ *
+ * DEFECT 4: image_url and author are now stored. The original parser never
+ * extracted them, so every card would have rendered without a thumbnail.
+ */
+function save_articles(PDO $db, array $items, int $blogId, int $categoryId): array
+{
+    /*
+     * Drop anything the purge at the end of this run would delete anyway.
+     *
+     * Feeds routinely carry a year of back catalogue. Without this the job
+     * inserts them, the housekeeping DELETE removes them minutes later, and
+     * every run does identical pointless work. It also made the summary line
+     * lie: a run reported "2446 new articles" into a table that held 1740.
+     */
+    $cutoff = time() - RETENTION_DAYS * 86400;
+    $tooOld = 0;
+    $fresh  = [];
+    $seen   = [];
+
+    foreach ($items as $it) {
+        if ($it['published_at'] !== null
+            && strtotime($it['published_at'] . ' UTC') < $cutoff) {
+            $tooOld++;
+            continue;
+        }
+        // A feed listing the same guid twice would otherwise appear twice in
+        // one statement, where ON CONFLICT cannot help.
+        if (isset($seen[$it['guid']])) {
+            continue;
+        }
+        $seen[$it['guid']] = true;
+        $fresh[] = $it;
+    }
+
+    if ($fresh === []) {
+        return ['inserted' => 0, 'too_old' => $tooOld];
+    }
+
+    /*
+     * ONE statement per chunk, not one per article.
+     *
+     * Each execute() is a network round trip, and this job's database is in
+     * another region — measured at ~920 ms per trip from a development
+     * machine. A feed with 30 articles cost 30 trips; a full run of 2446
+     * inserts took 26 minutes, essentially all of it waiting. Batching turns
+     * that into a couple of trips per feed.
+     */
+    $inserted = 0;
+
+    foreach (array_chunk($fresh, INSERT_CHUNK) as $chunk) {
+        $values = implode(',', array_fill(0, count($chunk), '(?,?,?,?,?,?,?,?,?,NOW())'));
+        $params = [];
+
+        foreach ($chunk as $it) {
+            array_push(
+                $params,
+                $it['guid'], $it['title'], $it['excerpt'], $it['url'],
+                $it['image_url'], $it['author'], $it['published_at'],
+                $blogId, $categoryId
+            );
+        }
+
+        $stmt = $db->prepare(
+            'INSERT INTO articles
+                 (guid, title, excerpt, article_url, image_url, author,
+                  published_at, blog_source_id, category_id, fetched_at)
+             VALUES ' . $values . '
+             ON CONFLICT (guid, category_id) DO NOTHING'
+        );
+        $stmt->execute($params);
+        $inserted += $stmt->rowCount();   // counts only rows that did not conflict
+    }
+
+    return ['inserted' => $inserted, 'too_old' => $tooOld];
 }
