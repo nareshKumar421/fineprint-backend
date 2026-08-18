@@ -20,6 +20,7 @@ require __DIR__ . '/../src/bootstrap.php';
 
 use App\Db;
 use App\Services\EventService;
+use App\Controllers\AccountController;
 use App\Services\FeedService;
 use App\Services\Scoring;
 
@@ -37,6 +38,23 @@ function bad(string $m): void { global $fail; $fail++; printf("  \033[31m[FAIL]\
 function assert_true(string $desc, bool $cond, string $detail = ''): void
 {
     $cond ? ok($desc . ($detail !== '' ? " ($detail)" : '')) : bad($desc . ($detail !== '' ? " — $detail" : ''));
+}
+
+/**
+ * A Request carrying a user id and a JSON body, without an HTTP request.
+ *
+ * Request reads its body from php://input, which cannot be written to in
+ * process, so the body is injected through the object's own json cache.
+ */
+function fake_request(int $userId, array $body): \App\Request
+{
+    $request = new \App\Request();
+    $request->userId = $userId;
+
+    $ref = new ReflectionProperty(\App\Request::class, 'json');
+    $ref->setValue($request, $body);
+
+    return $request;
 }
 
 $userId = null;
@@ -378,6 +396,78 @@ try {
         "inserted {$again['inserted']}");
 
     Db::exec("DELETE FROM articles WHERE guid LIKE ?", ["test-$stamp%"]);
+
+    /* ---- account deletion ----------------------------------------- */
+    echo "\naccount deletion\n";
+
+    /*
+     * Both stores require an in-app route to delete your account, and this is
+     * the one endpoint in the API that cannot be undone by anyone. What it
+     * must get right: the password gate, the cascade, and NOT deleting the
+     * donation records, which are an accounting obligation rather than the
+     * user's to erase.
+     */
+    $delPass = 'DeleteMe-' . bin2hex(random_bytes(4));
+    $delId = (int) Db::scalar(
+        "INSERT INTO users (email, password_hash, is_active)
+         VALUES (?, ?, true) RETURNING id",
+        ['deltest-' . bin2hex(random_bytes(6)) . '@example.invalid',
+         password_hash($delPass, PASSWORD_BCRYPT)]
+    );
+
+    Db::exec('INSERT INTO user_categories (user_id, category_id) VALUES (?, ?)', [$delId, $loved]);
+    Db::exec('INSERT INTO user_seen_articles (user_id, article_id) VALUES (?, ?)',
+             [$delId, (int) $lovedArticles[0]['id']]);
+    Db::exec("INSERT INTO article_events (user_id, article_id, event_type, client_event_id)
+              VALUES (?, ?, 'impression', ?)",
+             [$delId, (int) $lovedArticles[0]['id'], 'del-' . bin2hex(random_bytes(4))]);
+    Db::exec("INSERT INTO donations (user_id, amount, status) VALUES (?, 500, 'success')", [$delId]);
+
+    $before = Db::one(
+        'SELECT (SELECT count(*) FROM user_categories WHERE user_id = ?) AS topics,
+                (SELECT count(*) FROM article_events  WHERE user_id = ?) AS events,
+                (SELECT count(*) FROM donations       WHERE user_id = ?) AS donations',
+        [$delId, $delId, $delId]
+    );
+    assert_true('the doomed account has data to lose',
+        (int) $before['topics'] === 1 && (int) $before['events'] === 1
+        && (int) $before['donations'] === 1);
+
+    // A stolen phone with a live session must not be able to erase an account.
+    $rejected = false;
+    try {
+        (new AccountController())->destroy(fake_request($delId, ['password' => 'wrong-password']));
+    } catch (Throwable $e) {
+        $rejected = str_contains($e->getMessage(), 'incorrect');
+    }
+    assert_true('the wrong password is refused', $rejected);
+    assert_true('and nothing was deleted',
+        (int) Db::scalar('SELECT count(*) FROM users WHERE id = ?', [$delId]) === 1);
+
+    ob_start();
+    (new AccountController())->destroy(fake_request($delId, ['password' => $delPass]));
+    ob_end_clean();
+
+    assert_true('the account is gone',
+        (int) Db::scalar('SELECT count(*) FROM users WHERE id = ?', [$delId]) === 0);
+
+    $after = Db::one(
+        'SELECT (SELECT count(*) FROM user_categories    WHERE user_id = ?) AS topics,
+                (SELECT count(*) FROM user_seen_articles WHERE user_id = ?) AS seen,
+                (SELECT count(*) FROM article_events     WHERE user_id = ?) AS events,
+                (SELECT count(*) FROM user_tokens        WHERE user_id = ?) AS tokens',
+        [$delId, $delId, $delId, $delId]
+    );
+    assert_true('every personal row cascaded away',
+        array_sum(array_map('intval', $after)) === 0,
+        json_encode($after));
+
+    // The money trail survives, detached. Deleting it would destroy an
+    // accounting record that is not the user's to erase.
+    assert_true('donations are retained with the user detached',
+        (int) Db::scalar('SELECT count(*) FROM donations WHERE user_id IS NULL AND amount = 500') >= 1);
+
+    Db::exec('DELETE FROM donations WHERE user_id IS NULL AND amount = 500');
 
 } finally {
     if ($userId !== null) {

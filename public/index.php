@@ -17,6 +17,7 @@ use App\Controllers\EventController;
 use App\Controllers\CategoryController;
 use App\Controllers\FeedController;
 use App\Controllers\HealthController;
+use App\Controllers\LegalController;
 use App\Request;
 use App\Router;
 
@@ -27,6 +28,12 @@ $router = new Router();
 // throttle the monitor itself and report an outage that is not happening.
 // Returns 503, not 200, when the database is unreachable.
 $router->get('/', [HealthController::class, 'index']);
+
+/* ---- legal ----------------------------------------------------------- */
+// Public, no auth, no rate limit. Both app stores require a reachable
+// privacy-policy URL on the listing, and a store reviewer fetching it must
+// never meet a 429 or a token check.
+$router->get('/privacy', [LegalController::class, 'privacy']);
 
 /* ---- auth ---------------------------------------------------------- */
 // 5 attempts per IP per minute on the two endpoints worth brute-forcing.
@@ -82,8 +89,10 @@ $router->post('/api/user/profile',  [AccountController::class, 'updateProfile'],
 $router->post('/api/user/password', [AccountController::class, 'changePassword'],
               auth: true, limit: ['pwchange', 5, 3600, true]);
 
-/* ---- account deletion ---------------------------------- PHASE 8 ----
-$router->delete('/api/user/account', [AccountController::class, 'destroy'], auth: true);
------------------------------------------------------------------------- */
+/* ---- account deletion ------------------------------------------------- */
+// Required by both app stores for any app with accounts. Password-confirmed
+// and irreversible, so 3 per user per hour — a real deletion happens once.
+$router->delete('/api/user/account', [AccountController::class, 'destroy'],
+                auth: true, limit: ['delacct', 3, 3600, true]);
 
 $router->dispatch(new Request());

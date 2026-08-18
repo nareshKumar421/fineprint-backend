@@ -141,4 +141,84 @@ final class AccountController
             'sessions_ended'  => $revoked,
         ]);
     }
+
+    /**
+     * DELETE /api/user/account
+     *
+     * REQUIRED BY BOTH STORES. Google Play and the App Store both mandate an
+     * in-app route to delete your account for any app that lets you create
+     * one — it is a review blocker, not a nicety. Until this existed, removing
+     * an account meant someone hand-writing SQL against production.
+     *
+     * The password is required. A stolen phone with a live session must not
+     * be able to erase somebody's account, and unlike a password change this
+     * cannot be undone by anyone.
+     *
+     * WHAT SURVIVES
+     *
+     * Donations do. `donations.user_id` is ON DELETE SET NULL, so the payment
+     * records stay with the user detached — the money trail is an accounting
+     * obligation and is not the user's to erase. Everything genuinely personal
+     * goes with the row: chosen topics, tokens, seen history, interaction
+     * events and hidden sources all cascade.
+     */
+    public function destroy(Request $request): void
+    {
+        $userId   = $request->requireUserId();
+        $password = $request->input('password');
+
+        if (!is_string($password) || $password === '') {
+            throw new ApiException('VALIDATION_ERROR',
+                'Your password is required to delete your account.', 400);
+        }
+
+        $row = Db::one('SELECT password_hash FROM users WHERE id = ?', [$userId]);
+        if ($row === null) {
+            throw new ApiException('TOKEN_INVALID', 'Please log in again.', 401);
+        }
+
+        if (!password_verify($password, $row['password_hash'])) {
+            throw new ApiException('INVALID_CREDENTIALS', 'That password is incorrect.', 401);
+        }
+
+        /*
+         * Count what is about to go, before it goes. The response is the only
+         * receipt the user will ever get — afterwards there is nothing left to
+         * query, and "deleted" with no detail is indistinguishable from a
+         * request that quietly did nothing.
+         */
+        $summary = Db::one(
+            'SELECT (SELECT count(*) FROM user_categories    WHERE user_id = ?) AS topics,
+                    (SELECT count(*) FROM user_seen_articles WHERE user_id = ?) AS seen,
+                    (SELECT count(*) FROM article_events     WHERE user_id = ?) AS events,
+                    (SELECT count(*) FROM user_tokens        WHERE user_id = ?) AS devices,
+                    (SELECT count(*) FROM donations          WHERE user_id = ?) AS donations',
+            [$userId, $userId, $userId, $userId, $userId]
+        ) ?? [];
+
+        // One statement. Every personal table is ON DELETE CASCADE, and
+        // donations are ON DELETE SET NULL, so the database enforces the
+        // policy rather than this method trying to remember every table.
+        $deleted = Db::exec('DELETE FROM users WHERE id = ?', [$userId]);
+
+        if ($deleted !== 1) {
+            throw new ApiException('SERVER_ERROR', 'Could not delete the account.', 500);
+        }
+
+        Response::json([
+            'success' => true,
+            'deleted' => [
+                'topics'   => (int) ($summary['topics']   ?? 0),
+                'seen'     => (int) ($summary['seen']     ?? 0),
+                'events'   => (int) ($summary['events']   ?? 0),
+                'devices'  => (int) ($summary['devices']  ?? 0),
+            ],
+            // Named explicitly rather than left for someone to discover.
+            'retained' => [
+                'donations' => (int) ($summary['donations'] ?? 0),
+                'reason'    => 'Payment records are kept for accounting, with your account detached.',
+            ],
+        ]);
+    }
+
 }
