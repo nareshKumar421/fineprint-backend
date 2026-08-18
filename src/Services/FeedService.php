@@ -45,15 +45,20 @@ final class FeedService
      * of any single article.
      */
     private const MAX_PER_SOURCE   = 2;
-    private const MAX_PER_CATEGORY = 4;
 
     /**
-     * The category cap is skipped below this many chosen categories.
+     * Floor for the per-category cap. The cap actually applied is the larger
+     * of this and `ceil(limit / categories)` — see diversityPass().
      *
-     * With two categories selected, a cap of 4 would hold a 20-card page to
-     * 8 articles. The refill pass would recover them, but skipping the cap
-     * outright is clearer than relying on the safety net.
+     * A FIXED cap of 4 is a trap, and it shipped as one. Four categories on a
+     * 20-card page allows at most 4 x 4 = 16 articles, so the cap can never be
+     * satisfied, the refill fires every single time, and because the refill
+     * relaxed both caps at once the per-source cap stopped holding as well.
+     * Observed in production: one source took 4 of 20 slots.
      */
+    private const MIN_PER_CATEGORY = 4;
+
+    /** Below this many contributing categories, capping by category is moot. */
     private const CATEGORY_CAP_MIN_CATEGORIES = 3;
 
     /** Recency window. Removing this makes the query SLOWER — see below. */
@@ -388,41 +393,67 @@ final class FeedService
      */
     private function diversityPass(array $rows, int $limit, int $categoryCount): array
     {
-        $applyCategoryCap = $categoryCount >= self::CATEGORY_CAP_MIN_CATEGORIES;
+        /*
+         * The category cap ADAPTS to how many categories there are, so that a
+         * full page is always reachable without relaxing anything. With four
+         * categories and twenty slots it is 5, not 4; with ten categories it
+         * stays at the floor of 4.
+         *
+         * A cap that cannot be satisfied is worse than no cap: it forces the
+         * relaxation path on every request, and whatever the relaxation gives
+         * up gets given up every time.
+         */
+        $categoryCap = $categoryCount >= self::CATEGORY_CAP_MIN_CATEGORIES
+            ? max(self::MIN_PER_CATEGORY, (int) ceil($limit / max(1, $categoryCount)))
+            : PHP_INT_MAX;
 
-        $page       = [];
-        $skipped    = [];
-        $perSource  = [];
+        /*
+         * Three passes, relaxing ONE constraint at a time.
+         *
+         * The order encodes which guarantee matters more. Seeing the same blog
+         * repeatedly is what readers notice and complain about; a category
+         * imbalance is far less visible. So the category cap is surrendered
+         * first, and the per-source cap only when a full page is otherwise
+         * impossible — which happens when the user's topics genuinely do not
+         * contain enough distinct blogs.
+         *
+         * The previous version dropped both at once and lost the source cap
+         * for free, whenever the category cap happened to bind.
+         */
+        $passes = [
+            ['source' => self::MAX_PER_SOURCE, 'category' => $categoryCap],
+            ['source' => self::MAX_PER_SOURCE, 'category' => PHP_INT_MAX],
+            ['source' => PHP_INT_MAX,          'category' => PHP_INT_MAX],
+        ];
+
+        $page        = [];
+        $taken       = [];
+        $perSource   = [];
         $perCategory = [];
 
-        foreach ($rows as $r) {
-            if (count($page) >= $limit) {
-                break;
-            }
-
-            $source   = (int) $r['blog_source_id'];
-            $category = (int) $r['category_id'];
-
-            $sourceFull   = ($perSource[$source] ?? 0) >= self::MAX_PER_SOURCE;
-            $categoryFull = $applyCategoryCap
-                && ($perCategory[$category] ?? 0) >= self::MAX_PER_CATEGORY;
-
-            if ($sourceFull || $categoryFull) {
-                $skipped[] = $r;
-                continue;
-            }
-
-            $page[] = $r;
-            $perSource[$source]     = ($perSource[$source] ?? 0) + 1;
-            $perCategory[$category] = ($perCategory[$category] ?? 0) + 1;
-        }
-
-        if (count($page) < $limit && $skipped !== []) {
-            foreach ($skipped as $r) {
+        foreach ($passes as $caps) {
+            foreach ($rows as $i => $r) {
                 if (count($page) >= $limit) {
-                    break;
+                    break 2;
                 }
-                $page[] = $r;
+                if (isset($taken[$i])) {
+                    continue;
+                }
+
+                $source   = (int) $r['blog_source_id'];
+                $category = (int) $r['category_id'];
+
+                if (($perSource[$source] ?? 0) >= $caps['source']) {
+                    continue;
+                }
+                if (($perCategory[$category] ?? 0) >= $caps['category']) {
+                    continue;
+                }
+
+                $page[]      = $r;
+                $taken[$i]   = true;
+                $perSource[$source]     = ($perSource[$source] ?? 0) + 1;
+                $perCategory[$category] = ($perCategory[$category] ?? 0) + 1;
             }
         }
 

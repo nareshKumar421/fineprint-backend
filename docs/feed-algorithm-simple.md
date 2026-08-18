@@ -372,12 +372,36 @@ for each candidate in score order:
 if page is short, fill from the skipped list in score order
 ```
 
-**Caps for a 20-card page:** max 2 per source, max 4 per category.
+**Caps for a 20-card page:** max 2 per source; per category, the larger of 4
+and `ceil(limit / categories)`.
 
-The category cap is skipped below three categories — and the count used is
-categories that actually **contributed candidates**, not categories the reader
-selected. Someone who picked twenty topics but has articles in two should not
-have a per-category cap applied to them.
+The category cap **scales**, and must. A fixed cap of 4 with four categories
+allows at most `4 x 4 = 16` of 20 slots — the cap can never be met, so the
+relaxation path runs on every single request. A cap that cannot be satisfied
+is worse than no cap at all, because whatever the relaxation gives up is given
+up every time.
+
+The cap is skipped below three categories, and the count used is categories
+that actually **contributed candidates**, not categories the reader selected.
+
+### The guarantees, in priority order
+
+Relaxation happens one constraint at a time, in this order:
+
+| Rank | Guarantee | Strength |
+|---|---|---|
+| 1 | The page is always full | **Absolute** — a cap is never a reason to return less than was asked for |
+| 2 | No more than 2 per source | **Strong** — surrendered only when the reader's topics genuinely lack enough distinct blogs |
+| 3 | Category balance | **Best effort** — surrendered first |
+
+Repeatedly seeing the same blog is what readers notice and complain about; a
+category imbalance is far less visible. So the category cap goes first and the
+source cap only when a full page is otherwise impossible.
+
+> This ordering was learned the hard way. The first implementation relaxed
+> both caps at once, so any time the category cap bound — which, per the
+> arithmetic above, was always — the source cap silently stopped holding too.
+> A production smoke test caught one source taking 4 of 20 slots. See §13.
 
 The refill pass is essential — it guarantees you never return a short page just
 because the caps were tight. A user with two categories would otherwise be
@@ -583,6 +607,7 @@ implementation, each because the code proved the design wrong.
 | 2 | `hide_source` / `not_interested` set `Penalty = 0.0` | both are **hard filters in SQL** | `max(0 × score, 0.01)` is `0.01`, so "banned" articles stayed reachable. The floor and the zero contradicted each other. |
 | 3 | diversity cap keyed on the user's selected categories | keyed on categories that **contributed candidates** | 20 topics selected but 2 with articles would wrongly trigger a cap meant for variety. |
 | 4 | `user_feed_stats` sized the cold-start switch off a 30-day window | **lifetime** impressions | Maturity should not expire because someone took a month off; the affinity rollups already handle recency. |
+| 5 | one refill pass, relaxing all caps together | **three passes**, relaxing one constraint at a time, and a category cap that **scales** with the category count | Caught in production after deploy. A fixed cap of 4 per category cannot fill a 20-card page from 4 categories (4x4=16), so the refill ran every request and took the source cap down with it — one blog held 4 of 20 slots. |
 
 **Files.** Backend: `db/007_feed_scoring.sql`, `src/Services/Scoring.php`,
 `src/Services/EventService.php`, `src/Controllers/EventController.php`,

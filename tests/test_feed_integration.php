@@ -266,6 +266,52 @@ try {
     assert_true('the page draws on many sources', count($perSource) >= 10,
         count($perSource) . ' distinct sources');
 
+    /*
+     * FOUR categories — the case that shipped broken.
+     *
+     * A fixed cap of 4 per category allows at most 4 x 4 = 16 of 20 slots, so
+     * the cap could never be met, the relaxation path ran on every request,
+     * and because it dropped the source cap at the same time one blog took 4
+     * of 20 slots in production. The cap now scales to ceil(20/4) = 5.
+     */
+    Db::exec('DELETE FROM user_categories WHERE user_id = ?', [$userId]);
+    Db::exec(
+        "INSERT INTO user_categories (user_id, category_id)
+         SELECT ?, id FROM category_master WHERE is_active = true LIMIT 4
+         ON CONFLICT DO NOTHING",
+        [$userId]
+    );
+    Db::exec('DELETE FROM user_seen_articles WHERE user_id = ?', [$userId]);
+
+    $four = (new FeedService())->build($userId, 20);
+    $fourSources = [];
+    $fourCats    = [];
+    foreach ($four as $a) {
+        $fourSources[$a['source']]  = ($fourSources[$a['source']]  ?? 0) + 1;
+        $fourCats[$a['category']]   = ($fourCats[$a['category']]   ?? 0) + 1;
+    }
+
+    assert_true('four categories still fill the page', count($four) === 20,
+        count($four) . ' articles');
+    assert_true('four categories still respect the source cap', max($fourSources) <= 2,
+        'max ' . max($fourSources) . ' per source');
+    /*
+     * The category cap is BEST EFFORT and is surrendered first, by design —
+     * so this asserts the property that actually matters to a reader rather
+     * than the cap number. Four chosen topics should all appear, and none
+     * should swallow half the page.
+     *
+     * The cap genuinely cannot always hold: 4 categories x cap 5 is exactly
+     * 20, which requires every category to field 5 articles from at least 3
+     * distinct blogs. A category with only two blogs caps out at 4 and the
+     * shortfall has to come from somewhere.
+     */
+    assert_true('all four chosen topics appear', count($fourCats) === 4,
+        implode(', ', array_map(
+            fn($k, $v) => "$k=$v", array_keys($fourCats), $fourCats)));
+    assert_true('no single topic swallows the page', max($fourCats) <= 10,
+        'max ' . max($fourCats) . ' per category');
+
     // Now the opposite case: narrow the pool right down and confirm the page
     // is STILL full. A cap must never be a reason to return less than asked.
     Db::exec('DELETE FROM user_categories WHERE user_id = ?', [$userId]);
