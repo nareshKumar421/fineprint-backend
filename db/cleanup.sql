@@ -21,6 +21,12 @@ WHERE COALESCE(published_at, fetched_at) < NOW() - INTERVAL '60 days';
 DELETE FROM user_seen_articles
 WHERE seen_at < NOW() - INTERVAL '14 days';
 
+-- Interaction events. 90 days is well past the 30-day window the rollups
+-- read, and this is now the fastest-growing table in the schema — it gains a
+-- row per card that appears on a screen, not per user action.
+DELETE FROM article_events
+WHERE created_at < NOW() - INTERVAL '90 days';
+
 -- Expired auth tokens.
 DELETE FROM user_tokens
 WHERE expires_at < NOW();
@@ -32,3 +38,4 @@ WHERE run_at < NOW() - INTERVAL '90 days';
 -- Reclaim space and refresh planner statistics after the deletes.
 VACUUM ANALYZE articles;
 VACUUM ANALYZE user_seen_articles;
+VACUUM ANALYZE article_events;

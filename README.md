@@ -37,6 +37,7 @@ cp .env.example .env             # then fill in the database credentials
 psql "$FEED_DB_URL" -f db/schema.sql
 psql "$FEED_DB_URL" -f db/seed_categories.sql
 psql "$FEED_DB_URL" -f db/002_rate_limits.sql
+psql "$FEED_DB_URL" -f db/007_feed_scoring.sql
 ```
 
 Requires `php-pgsql`. Without it `new PDO('pgsql:...')` fails immediately and
@@ -54,12 +55,18 @@ Production is nginx + PHP-FPM with the root at `public/`.
 
 ```bash
 php jobs/fetch_feeds.php          # collects articles; safe to run repeatedly
+php jobs/rollup_stats.php         # rebuilds the feed's ranking stats
 php jobs/find_feed.php <url>      # validates a blog's feed, prints SQL
 ```
 
 ```cron
-0 3 * * * /usr/bin/php /var/www/blogfeed/backend/jobs/fetch_feeds.php >> /var/log/feedjob.log 2>&1
+0  3 * * * /usr/bin/php /var/www/blogfeed/backend/jobs/fetch_feeds.php  >> /var/log/feedjob.log 2>&1
+30 3 * * * /usr/bin/php /var/www/blogfeed/backend/jobs/rollup_stats.php >> /var/log/feedjob.log 2>&1
 ```
+
+`rollup_stats.php` runs **after** the fetch and turns raw interaction events
+into the numbers the feed ranks on. Skipping it is not fatal — the feed keeps
+working on yesterday's stats — but the ranking stops learning.
 
 Cron does not read your shell profile — `feed_load_env()` reads `.env`
 directly, which is what stops the job failing in production only.
@@ -67,8 +74,14 @@ directly, which is what stops the job failing in production only.
 ## Tests
 
 ```bash
-php tests/test_feedlib.php        # 35 parser tests, no database or network
+php tests/test_feedlib.php           # 35 parser tests, no database or network
+php tests/test_scoring.php           # 43 ranking-formula tests, no database
+php tests/test_feed_integration.php  # 18 end-to-end tests; NEEDS a database
 ```
+
+The first two need nothing and run in milliseconds. The third creates its own
+throwaway user, exercises events → rollup → ranking, and deletes that user
+again — including when it fails.
 
 The phase verification scripts live in `extra/scripts/`.
 
@@ -81,3 +94,7 @@ The phase verification scripts live in `extra/scripts/`.
 - All dates stored and served in **UTC**.
 - Money is `NUMERIC`, never a float.
 - Excerpts only, never full article text.
+- **A tap under 10 seconds is not a success.** Every rate the feed ranks on
+  counts good taps only; break that and it learns to prefer better bait.
+- Ranking constants live in **two files that must agree**:
+  `src/Services/Scoring.php` and `jobs/rollup_stats.php`.

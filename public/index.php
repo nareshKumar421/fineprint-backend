@@ -13,6 +13,7 @@ require __DIR__ . '/../src/bootstrap.php';
 use App\Controllers\AccountController;
 use App\Controllers\AuthController;
 use App\Controllers\DonationController;
+use App\Controllers\EventController;
 use App\Controllers\CategoryController;
 use App\Controllers\FeedController;
 use App\Controllers\HealthController;
@@ -40,6 +41,19 @@ $router->post('/api/user/categories', [CategoryController::class, 'save'], auth:
 
 /* ---- feed ------------------------------------------------------------ */
 $router->get('/api/feed', [FeedController::class, 'index'], auth: true);
+
+/* ---- interaction events ----------------------------------------------- */
+// What the feed learns from. 120 batches per USER per hour: the app flushes
+// at most every 30 seconds, so a well-behaved client sends ~120 in an hour of
+// continuous use and anything faster is a loop that needs stopping.
+$router->post('/api/events', [EventController::class, 'store'],
+              auth: true, limit: ['events', 120, 3600, true]);
+
+// Blogs this user has muted, and the way back. The undo half matters most:
+// a hide is invisible once applied, so without this a mis-tap silently
+// removes a source forever with nothing to show for it.
+$router->get ('/api/user/hidden-sources', [EventController::class, 'hidden'],    auth: true);
+$router->post('/api/user/hidden-sources', [EventController::class, 'setHidden'], auth: true);
 
 /* ---- donations ------------------------------------------------------- */
 // 10 per USER per hour (the trailing true) — keying this on IP would make

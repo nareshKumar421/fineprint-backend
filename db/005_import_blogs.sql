@@ -7,10 +7,18 @@
 --  imported and left to fail nightly. The failure count on blog_sources
 --  exists for feeds that BREAK later, not for ones known broken today.
 --
---  The 14 new categories are created is_active = false on purpose.
---  docs/09 §1: a category must not be active until it has >= 5 blogs AND
---  >= 20 recent articles, or a user picks it and gets a blank feed. Run
---  jobs/fetch_feeds.php, then activate the ones that clear the bar.
+--  The 14 new categories are created is_active = false.
+--
+--  SUPERSEDED 2026-08-18. That gate -- >= 5 blogs AND >= 20 recent articles
+--  before a category may go live -- has been removed, and all 20 categories
+--  are now active. The INSERTs below are left exactly as they ran; changing
+--  a migration that has already been applied would make this file disagree
+--  with the database it produced. A fresh database therefore still lands
+--  these 14 inactive, and needs one statement afterwards:
+--
+--      UPDATE category_master SET is_active = true;
+--
+--  See db/006_activate_all_categories.sql, which does exactly that.
 --
 --  blog_url is derived from the feed URL's scheme and host — the sheet
 --  only carries feed URLs, and the column is NOT NULL.
