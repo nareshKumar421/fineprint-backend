@@ -104,3 +104,8 @@ The phase verification scripts live in `extra/scripts/`.
   counts good taps only; break that and it learns to prefer better bait.
 - Ranking constants live in **two files that must agree**:
   `src/Services/Scoring.php` and `jobs/rollup_stats.php`.
+- An article may be shown to one reader at most `FeedService::MAX_VIEWS`
+  times. Past that the feed says "caught up" rather than looping.
+- `user_seen_articles` retention must stay **>= article retention**, or a view
+  count expires while the article it counts is still alive and the article
+  quietly becomes eligible again.
