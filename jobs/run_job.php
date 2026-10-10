@@ -252,7 +252,12 @@ try {
                 $summary = $n === 0 ? 'no warnings — ' . $summary
                                     : $n . ' warning(s): ' . trim($warns[1][0]);
             }
-            $result = ['exit' => $r['exit'], 'output' => $r['output'], 'summary' => $summary];
+            // fetch_feeds exits 2 when at least one feed failed — the normal
+            // state of a 76-feed corpus, where a publisher is always down
+            // somewhere — and the summary already carries the count. The job
+            // is done; only exit 1, a fatal error, is a failure.
+            $result = ['exit' => $r['exit'], 'output' => $r['output'], 'summary' => $summary,
+                       'done' => $r['exit'] === 0 || ($type === 'sync' && $r['exit'] === 2)];
             break;
 
         case 'cleanup':
@@ -305,10 +310,10 @@ try {
     ];
 }
 
-$status = $result['exit'] === 0 ? 'done' : 'failed';
+$status = ($result['done'] ?? $result['exit'] === 0) ? 'done' : 'failed';
 job_finish($id, $status, (int) $result['exit'], (string) $result['output'], (string) $result['summary']);
 job_note("job #{$id} {$status} (exit {$result['exit']}): {$result['summary']}");
 
 flock($lock, LOCK_UN);
 fclose($lock);
-exit($result['exit'] === 0 ? 0 : 1);
+exit($status === 'done' ? 0 : 1);
