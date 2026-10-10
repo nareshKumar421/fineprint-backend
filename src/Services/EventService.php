@@ -13,6 +13,7 @@ namespace App\Services;
 
 use App\ApiException;
 use App\Db;
+use Throwable;
 
 final class EventService
 {
@@ -86,8 +87,11 @@ final class EventService
             return ['accepted' => 0, 'skipped' => count($events)];
         }
 
-        $accepted = $this->insert($userId, $clean);
+        $inserted = $this->insert($userId, $clean);
         $this->applyHides($userId, $clean, $sourceOf);
+        $this->countViews($userId, $inserted);
+
+        $accepted = count($inserted);
 
         return ['accepted' => $accepted, 'skipped' => count($events) - $accepted];
     }
@@ -172,7 +176,7 @@ final class EventService
      * numbers. No target is named on the conflict clause because either index
      * may be the one that fires.
      */
-    private function insert(int $userId, array $rows): int
+    private function insert(int $userId, array $rows): array
     {
         $values = [];
         $params = [];
@@ -188,13 +192,78 @@ final class EventService
             $params[] = $r['client_id'];
         }
 
+        /*
+         * RETURNING, not rowCount(). The caller needs to know WHICH rows
+         * landed, not just how many — a retried flush is dropped by ON
+         * CONFLICT, and counting a view for an event that was already stored
+         * would inflate the view count and retire articles early.
+         */
         $sql = 'INSERT INTO article_events
                     (user_id, article_id, event_type, dwell_ms, position,
                      session_id, client_event_id)
                 VALUES ' . implode(',', $values) . '
-                ON CONFLICT DO NOTHING';
+                ON CONFLICT DO NOTHING
+                RETURNING article_id, event_type';
 
-        return Db::exec($sql, $params);
+        return Db::all($sql, $params);
+    }
+
+    /**
+     * Record that the reader actually had these articles on screen.
+     *
+     * This is the counter the archive's cap prefers. It is kept separate from
+     * times_shown because the two answer different questions: the server
+     * sending a 20-card page is not evidence that anybody saw twenty
+     * articles, and capping on serves alone retires articles the reader never
+     * laid eyes on.
+     *
+     * Only genuinely new impression events reach here, so a retried flush
+     * cannot double-count.
+     *
+     * Errors are swallowed. A missed view count costs one extra showing of
+     * one article; a 500 on the events endpoint costs every event in the
+     * batch and teaches the client to retry into a wall.
+     */
+    private function countViews(int $userId, array $inserted): void
+    {
+        $articleIds = [];
+        foreach ($inserted as $row) {
+            if (($row['event_type'] ?? '') === 'impression') {
+                $articleIds[(int) $row['article_id']] = true;
+            }
+        }
+
+        if ($articleIds === []) {
+            return;
+        }
+
+        try {
+            // Four columns, so four values per row. The two literals are the
+            // INSERT path only — on conflict the UPDATE below takes over.
+            $values = implode(',', array_fill(0, count($articleIds), '(?, ?, 1, 1)'));
+            $params = [];
+            foreach (array_keys($articleIds) as $id) {
+                $params[] = $userId;
+                $params[] = $id;
+            }
+
+            /*
+             * times_shown defaults to 1 on insert. An impression for an
+             * article with no seen row means the server served it and the
+             * bookkeeping is only arriving now — one showing is the honest
+             * figure, not zero.
+             */
+            Db::exec(
+                "INSERT INTO user_seen_articles (user_id, article_id, times_shown, times_viewed)
+                 VALUES $values
+                 ON CONFLICT (user_id, article_id) DO UPDATE
+                     SET times_viewed  = user_seen_articles.times_viewed + 1,
+                         last_shown_at = NOW()",
+                $params
+            );
+        } catch (Throwable $e) {
+            error_log('EventService::countViews failed: ' . $e->getMessage());
+        }
     }
 
     /**

@@ -16,10 +16,17 @@
 DELETE FROM articles
 WHERE COALESCE(published_at, fetched_at) < NOW() - INTERVAL '60 days';
 
--- Seen-article history. Only recent history is needed to stop repeats;
--- this is the fastest-growing table in the schema.
+-- Seen-article history.
+--
+-- 60 days, matching article retention, NOT 14.
+--
+-- This row now carries the view counters the archive's cap reads. At 14 days
+-- the count was forgotten while the article itself was still alive, so an
+-- article a reader had already dismissed twice quietly became eligible again
+-- — the exact repetition this cap exists to stop. Aligning the two windows
+-- means a count can only expire alongside the article it counts.
 DELETE FROM user_seen_articles
-WHERE seen_at < NOW() - INTERVAL '14 days';
+WHERE seen_at < NOW() - INTERVAL '60 days';
 
 -- Interaction events. 90 days is well past the 30-day window the rollups
 -- read, and this is now the fastest-growing table in the schema — it gains a
