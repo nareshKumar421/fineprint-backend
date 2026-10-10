@@ -203,8 +203,12 @@ final class AdminAuth
 
         if ($submitted === null || $submitted === ''
             || !hash_equals($admin['csrf_hash'], hash('sha256', $submitted))) {
+            // 403, not 419. 419 is a Laravel convention with no standard
+            // status line; Apache's mod_php substitutes 500 for codes it does
+            // not know, so the rejection worked in development (php -S) and
+            // reported as a server error in production.
             throw new ApiException('CSRF_INVALID',
-                'That form expired. Reload the page and try again.', 419);
+                'That form expired. Reload the page and try again.', 403);
         }
     }
 
