@@ -26,7 +26,7 @@ FROM php:8.3-apache
 # extensions just linked against.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends libpq-dev libonig-dev; \
+    apt-get install -y --no-install-recommends libpq-dev libonig-dev postgresql-client; \
     docker-php-ext-install -j"$(nproc)" pdo_pgsql mbstring; \
     rm -rf /var/lib/apt/lists/*
 

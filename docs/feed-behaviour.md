@@ -194,7 +194,8 @@ The endpoint has **two phases**, and the phase is named in the response:
 | Phase | When | Content | Order |
 |---|---|---|---|
 | `fresh` | no cursor | articles the user has **not** seen, last 30 days | weighted shuffle |
-| `archive` | a cursor is sent, **or** fresh came back empty | everything in the user's categories, seen or not | strict newest-first |
+| `archive` | a cursor is sent, **or** fresh came back empty | the user's categories, **excluding anything already shown `MAX_VIEWS` times** | strict newest-first |
+| `caught_up` | the archive is empty and this reader has history | nothing — they have reached the end | — |
 
 ### 2.1 Fresh — candidate selection
 
@@ -278,8 +279,35 @@ app, not as "you're up to date". So when fresh runs dry, `FeedController` falls
 straight through to `archive()` rather than returning `[]`.
 
 Archive is **ordered, not shuffled** — the user is browsing a back catalogue
-and a stable order is what makes paging through it coherent — and uses
-**keyset** pagination:
+and a stable order is what makes paging through it coherent.
+
+### The view cap
+
+Originally the archive had no seen-filter at all, so it served the same
+articles indefinitely. A reader reported exactly that. It is now capped at
+`FeedService::MAX_VIEWS` (**2**) showings per article per reader: one in
+fresh, at most one more in archive, then never again.
+
+Which counter the cap reads depends on the reader:
+
+```
+effective_views = user_feed_stats.impressions > 0
+                  ? user_seen_articles.times_viewed   -- app reports impressions
+                  : user_seen_articles.times_shown    -- fall back to serves
+```
+
+The two are not interchangeable. `markSeen()` marks all 20 articles of a page
+as shown even when the reader scrolled past three, so capping on serves alone
+retires articles nobody ever saw. `times_viewed` is written only by
+`EventService`, from real impressions, and only for events newly inserted — a
+retried flush must not count twice. The switch is per reader and upgrades
+itself the moment their app starts reporting.
+
+When everything is capped the response is `phase: "caught_up"` rather than an
+empty `archive`, because "you have read everything" and "your topics are
+empty" need different words on screen.
+
+It uses **keyset** pagination:
 
 ```sql
 AND (?::timestamptz IS NULL OR (a.published_at, a.id) < (?::timestamptz, ?::bigint))

@@ -6,7 +6,7 @@
  * has to be a real web page rather than a document in a repository. The API
  * is already a public HTTPS host, so it serves one:
  *
- *     https://fineprint-backend-gsgu.onrender.com/privacy
+ *     https://fineprint.nareshkumar.online/privacy
  *
  * It is written from what the code ACTUALLY does. A policy that describes an
  * app you meant to build is worse than none: it is a public, dated statement
@@ -26,7 +26,7 @@ use App\Response;
 final class LegalController
 {
     /** Update when the substance changes, not on every deploy. */
-    private const LAST_UPDATED = '18 August 2026';
+    private const LAST_UPDATED = '10 October 2026';
 
     private const CONTACT = 'jivoit0@gmail.com';
 
@@ -130,8 +130,8 @@ blog and want it removed, email us and we will remove it.</p>
 </ul>
 
 <h2>Where your data is held</h2>
-<p>On servers in the United States, operated by Render (application) and Neon
-(database). Connections use TLS.</p>
+<p>On a server operated by Oracle Cloud Infrastructure. The application and
+its database run on that single host. Connections use TLS.</p>
 
 <h2>Children</h2>
 <p>FinePrint is not directed at children under 13, and we do not knowingly

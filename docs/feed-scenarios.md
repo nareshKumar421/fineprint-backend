@@ -358,6 +358,26 @@ over the list, not the last element.
 
 Appends are also de-duplicated by `id` against what is already rendered.
 
+### E2b. The same articles keep coming back
+
+**Fixed.** The archive used to have no seen-filter at all — by design, so a
+full scroll never hit a blank screen — which meant it served the same
+articles indefinitely. A reader reported it.
+
+An article may now be shown at most **twice**: once in fresh, once more in
+archive. After that it leaves the archive permanently.
+
+The count comes from `user_seen_articles`, which carries two counters.
+`times_shown` counts pages the server sent; `times_viewed` counts cards the
+reader actually had on screen. A reader whose app reports impressions is
+capped on the second, everyone else on the first — because a 20-card page
+marks 20 as shown when the reader scrolled past three, and capping on that
+alone retires articles nobody saw.
+
+Seen-history retention is 60 days, matching article retention. At the old 14
+days a count expired while its article was still alive, and the article
+silently became eligible again — the very repetition the cap exists to stop.
+
 ### E3. The archive runs out too
 
 `has_more: false`, and only then does the app show:
@@ -423,6 +443,32 @@ purge.
 ---
 
 ## G. Network and offline
+
+### G0. "You're offline" when the internet is fine
+
+**Fixed.** The API sleeps after ~15 minutes idle and takes 30-50 seconds to
+wake — measured at 44s. The client's timeout is 15s, so the first request
+after a quiet spell always failed, and `TIMEOUT` and `NETWORK_ERROR` shared a
+branch: a perfectly good connection was reported as "Offline — showing
+articles saved earlier". A reader complained about exactly that, and blamed
+the connectivity check.
+
+Three changes:
+
+- The client **retries a timeout once** with a 60-second budget, enough to
+  cover a wake. Only the first timeout of a session earns this; once the
+  server has answered, later timeouts fail fast, because then it is a real
+  problem.
+- A `NETWORK_ERROR` is **never** retried. It never left the device.
+- The UI is told while a wake is in progress and shows "Waking the server —
+  this can take up to a minute" rather than sitting silent for 45 seconds.
+
+The banner now distinguishes the two cases using NetInfo, which the app
+already had and simply was not consulting: a timeout with a live connection
+reads "Couldn't reach the server", not "Offline".
+
+The real fix is a host that does not sleep; the above is what makes the
+symptom honest either way.
 
 ### G1. Offline at launch
 

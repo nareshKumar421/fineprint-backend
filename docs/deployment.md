@@ -1,3 +1,17 @@
+> # SUPERSEDED — 10 October 2026
+>
+> This describes the **retired** Render + Neon deployment. FinePrint now runs
+> on a self-hosted VPS at **https://fineprint.nareshkumar.online** with its
+> database inside the host's existing PostgreSQL container.
+>
+> **See [deployment-vps.md](deployment-vps.md) instead.**
+>
+> Kept because it records why several decisions were made — the Neon pooler
+> discarding transactions, the Ohio/us-east-2 co-location, the free-tier
+> cold start that made a healthy app look offline. Those lessons outlived
+> the platform. Nothing here is live: the service is retired, and the
+> keep-warm and nightly-jobs workflows it depended on have been deleted.
+
 # Deployment — managed hosting (current setup)
 
 How the FinePrint API is deployed today, how to redeploy it, and the

@@ -164,6 +164,18 @@ function clean_excerpt(string $html, ?int $limit = null): string
     return rtrim($cut, " .,;:") . '...';
 }
 
+/**
+ * A title as a reader should see it: tags gone, entities decoded, whitespace
+ * collapsed. Titles arrive inside CDATA more often than not, and CDATA is
+ * delivered verbatim — so "he&#8217;ll" reached the database, the app and
+ * the dashboard as seven characters of entity, not an apostrophe.
+ */
+function clean_title(string $raw): string
+{
+    $text = html_entity_decode(strip_tags($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    return trim((string) preg_replace('/\s+/u', ' ', $text));
+}
+
 /* ------------------------------------------------------------------ */
 /*  Parsing                                                            */
 /* ------------------------------------------------------------------ */
@@ -330,7 +342,7 @@ function feed_parse(string $xmlString): array
     $items = [];
 
     foreach ($nodes as $node) {
-        $title = trim((string) $node->title);
+        $title = clean_title((string) $node->title);
 
         $link = trim((string) $node->link);
         if ($link === '' && isset($node->link['href'])) {

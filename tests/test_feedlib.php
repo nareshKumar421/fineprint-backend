@@ -194,6 +194,11 @@ assert_eq('HTML tags stripped',
     'Hello world', clean_excerpt('<p>Hello <b>world</b></p>'));
 assert_eq('entities decoded',
     'Tom & Jerry', clean_excerpt('Tom &amp; Jerry'));
+assert_eq('clean_title decodes the entities CDATA delivers verbatim',
+    "If Pope Leo throws out a first pitch he\u{2019}ll be the latest",
+    clean_title('If Pope Leo throws out a first pitch he&#8217;ll be the latest'));
+assert_eq('clean_title strips tags, decodes quotes, collapses whitespace',
+    "Tom & Jerry's \u{2018}quotes\u{2019}", clean_title("<b>Tom</b> &amp; Jerry&#39;s\n  &#8216;quotes&#8217;"));
 assert_eq('whitespace collapsed',
     'a b c', clean_excerpt("a\n\n  b\t c"));
 

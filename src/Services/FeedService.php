@@ -64,6 +64,20 @@ final class FeedService
     /** Recency window. Removing this makes the query SLOWER — see below. */
     private const WINDOW_DAYS = 30;
 
+    /**
+     * How many times one article may be shown to one reader, ever.
+     *
+     * Two: once in the fresh phase, and at most once more in the archive.
+     * A reader reported the same articles cycling back indefinitely, which
+     * they were — the archive deliberately had no seen-filter, so that a
+     * full scroll never hit a blank screen.
+     *
+     * Past this cap the feed says "you're all caught up" instead. An honest
+     * end is worth more than a loop: a loop teaches people the feed is
+     * broken, and they stop scrolling anyway.
+     */
+    private const MAX_VIEWS = 2;
+
     /*
      * Undated articles used to need a stand-in age here. They no longer do:
      * Scoring::recency() returns 0.0 for a null date, so they sink rather
@@ -152,9 +166,16 @@ final class FeedService
         // Fetch one extra row to learn whether another page exists, without
         // a second COUNT query over the whole table.
         $rows = Db::all(
+            sprintf(
             "SELECT a.id, a.title, a.excerpt, a.article_url, a.image_url, a.author,
                     a.published_at, b.blog_name, c.name AS category_name
                FROM articles a
+         -- Evaluated once, not per row. Decides which counter the cap below
+         -- reads, and costs no extra round trip.
+         CROSS JOIN (
+                    SELECT COALESCE(MAX(impressions), 0) AS u_impressions
+                      FROM user_feed_stats WHERE user_id = ?
+                  ) ufs
                JOIN blog_sources    b ON b.id = a.blog_source_id
                JOIN category_master c ON c.id = a.category_id
               WHERE a.category_id IN (
@@ -162,9 +183,31 @@ final class FeedService
                     )
                 AND a.published_at IS NOT NULL
                 AND (?::timestamptz IS NULL OR (a.published_at, a.id) < (?::timestamptz, ?::bigint))
+                -- THE CAP. An article leaves the archive once the reader has
+                -- had it MAX_VIEWS times.
+                --
+                -- Which counter applies depends on whether this reader\'s app
+                -- reports impressions. times_shown counts pages the server
+                -- sent, and a 20-card page marks 20 as shown when the reader
+                -- scrolled past three — so on its own it retires articles
+                -- nobody ever saw. times_viewed is the truth, and exists only
+                -- once a build with analytics is live. The CASE uses whichever
+                -- this reader actually has, and upgrades itself silently.
+                AND NOT EXISTS (
+                        SELECT 1 FROM user_seen_articles s
+                         WHERE s.user_id    = ?
+                           AND s.article_id = a.id
+                           AND (CASE WHEN ufs.u_impressions > 0
+                                     THEN s.times_viewed
+                                     ELSE s.times_shown END) >= %d
+                    )
               ORDER BY a.published_at DESC, a.id DESC
               LIMIT ?",
-            [$userId, $beforeTs, $beforeTs, $beforeId, $limit + 1]
+            self::MAX_VIEWS
+            ),
+            // Positional parameters follow the SQL TEXT, not the logic: the
+            // CROSS JOIN sits in FROM and so binds before the WHERE clause.
+            [$userId, $userId, $beforeTs, $beforeTs, $beforeId, $userId, $limit + 1]
         );
 
         $hasMore = count($rows) > $limit;
@@ -178,10 +221,28 @@ final class FeedService
             $next = self::iso8601($last['published_at']) . '|' . $last['id'];
         }
 
+        /*
+         * "Caught up" and "nothing here" look identical from an empty list and
+         * need different words on screen. A reader who has exhausted their
+         * topics should be told so; a reader whose topics were never populated
+         * has a different problem entirely.
+         *
+         * Any seen history at all means they have been reading, so an empty
+         * archive is exhaustion. One small query, and only on the empty path.
+         */
+        $caughtUp = false;
+        if ($rows === []) {
+            $caughtUp = Db::scalar(
+                'SELECT 1 FROM user_seen_articles WHERE user_id = ? LIMIT 1',
+                [$userId]
+            ) !== null;
+        }
+
         return [
             'articles'    => array_map([$this, 'format'], $rows),
             'next_cursor' => $next,
             'has_more'    => $hasMore,
+            'caught_up'   => $caughtUp,
         ];
     }
 
@@ -493,10 +554,21 @@ final class FeedService
                 $params[] = $id;
             }
 
+            /*
+             * Upsert, not DO NOTHING. The row now carries a COUNT, and the
+             * archive's cap reads it — so a repeat serve has to increment
+             * rather than be silently dropped.
+             *
+             * times_viewed is untouched here on purpose. It is the reader's
+             * side of the story and only EventService may write it; the
+             * server sending a page is not evidence that anybody saw it.
+             */
             Db::exec(
                 "INSERT INTO user_seen_articles (user_id, article_id)
                  VALUES $values
-                 ON CONFLICT DO NOTHING",
+                 ON CONFLICT (user_id, article_id) DO UPDATE
+                     SET times_shown   = user_seen_articles.times_shown + 1,
+                         last_shown_at = NOW()",
                 $params
             );
         } catch (Throwable $e) {

@@ -24,9 +24,12 @@ final class FeedController
      *
      * Two phases, so the feed never goes blank:
      *
-     *   FRESH    no cursor. Unseen articles, shuffled, weighted to recent.
-     *   ARCHIVE  a cursor, OR fresh came back empty. Older articles the user
-     *            has already seen, newest-first, keyset-paginated.
+     *   FRESH      no cursor. Unseen articles, shuffled, weighted to recent.
+     *   ARCHIVE    a cursor, OR fresh came back empty. Older articles the
+     *              user has already seen, newest-first, keyset-paginated —
+     *              capped at FeedService::MAX_VIEWS showings each.
+     *   CAUGHT_UP  the archive is empty because everything has hit that cap.
+     *              Distinct from an empty feed: this reader is up to date.
      *
      * The response says which phase produced it and whether more exists, so
      * the app knows when it has genuinely reached the end.
@@ -72,6 +75,20 @@ final class FeedController
 
     private function send(array $page, string $phase): void
     {
+        /*
+         * A third phase, reported only when the archive comes back empty for
+         * somebody who HAS been reading: they have reached the end of their
+         * topics rather than never having had anything in them.
+         *
+         * The app needs the difference. "You're all caught up, new articles
+         * arrive each morning" and "Your topics have no articles yet" call
+         * for different words and different buttons, and an empty list alone
+         * cannot tell them apart.
+         */
+        if ($phase === 'archive' && ($page['caught_up'] ?? false) === true) {
+            $phase = 'caught_up';
+        }
+
         Response::json([
             'articles'     => $page['articles'],
             'phase'        => $phase,

@@ -1,0 +1,85 @@
+# ============================================================
+#  FinePrint — production stack
+#
+#  ONE service. The database is the PostgreSQL instance already running on
+#  this host for a neighbouring application; FinePrint has its own database
+#  and its own role inside it (db/011_shared_db_role.sql documents them).
+#
+#  Why no database service here: the host has ~950MB of RAM and is already
+#  running Postgres. A second instance competes with the first for page
+#  cache and costs a second set of backups, upgrades and connection limits
+#  for no benefit. Sharing a server while keeping separate databases and
+#  roles gives isolation where it matters.
+#
+#  WHY network_mode: host
+#
+#  The existing Postgres container also runs with host networking and binds
+#  127.0.0.1:5432 — loopback only. A bridge-networked container cannot reach
+#  that address, and making it reachable would mean changing the
+#  neighbouring stack's bind address, which is not ours to change.
+#
+#  Host networking has a sharp edge: published ports are meaningless and the
+#  process binds the host's interfaces directly. BIND_ADDR below is what
+#  stops that becoming an internet-facing Apache — see docker-start.sh.
+# ============================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fineprint-app:${APP_VERSION:-current}
+    container_name: fineprint-app
+    restart: unless-stopped
+    network_mode: host
+
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:?APP_URL must be set}
+
+      # Loopback only. Nginx on the host is the sole way in.
+      BIND_ADDR: "127.0.0.1"
+      PORT: ${APP_PORT:-8081}
+
+      # 127.0.0.1 because this container shares the host's network namespace,
+      # so loopback here IS the host's loopback, where Postgres listens.
+      FEED_DB_DSN:  "pgsql:host=127.0.0.1;port=5432;dbname=${DB_NAME:-fineprint}"
+      FEED_DB_USER: ${DB_USER:-fineprint}
+      FEED_DB_PASS: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      FEED_DB_URL:  "postgresql://${DB_USER:-fineprint}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME:-fineprint}"
+
+      TOKEN_TTL_DAYS: ${TOKEN_TTL_DAYS:-30}
+      PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:-false}
+      DONATION_UPI_ID: ${DONATION_UPI_ID:-}
+      DONATION_UPI_NAME: ${DONATION_UPI_NAME:-}
+      INSTAMOJO_API_KEY: ${INSTAMOJO_API_KEY:-}
+      INSTAMOJO_AUTH_TOKEN: ${INSTAMOJO_AUTH_TOKEN:-}
+      INSTAMOJO_SALT: ${INSTAMOJO_SALT:-}
+      INSTAMOJO_BASE_URL: ${INSTAMOJO_BASE_URL:-}
+      FEED_USER_AGENT: ${FEED_USER_AGENT:-FinePrintApp/1.0 (+https://fineprint.nareshkumar.online/about)}
+      FEED_HTTP_TIMEOUT: ${FEED_HTTP_TIMEOUT:-15}
+      FEED_MAX_FAILURES: ${FEED_MAX_FAILURES:-5}
+      FEED_EXCERPT_CHARS: ${FEED_EXCERPT_CHARS:-200}
+
+      # nginx sets X-Forwarded-For; without this the rate limiter keys every
+      # request to the proxy's address and throttles everyone as one client.
+      TRUSTED_PROXY: "1"
+
+    volumes:
+      # The image caps Apache at 16 prefork workers, which is already modest
+      # for a dedicated box. This host shares ~950MB with another app and a
+      # database, so 16 mod_php children would reach swap under ordinary
+      # load and show up as latency rather than an error.
+      - ./deploy/apache-limits.conf:/etc/apache2/conf-enabled/zz-fineprint-limits.conf:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${APP_PORT:-8081}/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
