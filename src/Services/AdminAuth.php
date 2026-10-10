@@ -49,11 +49,28 @@ final class AdminAuth
      */
     public static function login(string $email, string $password, string $ip, string $agent): array
     {
-        $user = Db::one(
-            'SELECT id, email, display_name, password_hash, role, is_active
-               FROM users WHERE LOWER(email) = LOWER(?)',
-            [trim($email)]
+        $identifier = trim($email);
+
+        /*
+         * Email OR display name.
+         *
+         * Accounts are keyed by email, but an administrator signing in at a
+         * keyboard expects to type a name. Matching on display_name is only
+         * safe because it is restricted to ADMINS and required to be
+         * unambiguous below — display_name has no unique constraint, and two
+         * readers sharing one must never make a login non-deterministic.
+         */
+        $candidates = Db::all(
+            "SELECT id, email, display_name, password_hash, role, is_active
+               FROM users
+              WHERE LOWER(email) = LOWER(?)
+                 OR (role = 'admin' AND LOWER(display_name) = LOWER(?))",
+            [$identifier, $identifier]
         );
+
+        // An ambiguous name is treated as no match at all. Picking one would
+        // make which account you reach depend on row order.
+        $user = count($candidates) === 1 ? $candidates[0] : null;
 
         /*
          * One message for every failure below, and the hash is verified even

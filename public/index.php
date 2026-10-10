@@ -11,6 +11,7 @@ declare(strict_types=1);
 require __DIR__ . '/../src/bootstrap.php';
 
 use App\Controllers\AccountController;
+use App\Controllers\AdminController;
 use App\Controllers\AuthController;
 use App\Controllers\DonationController;
 use App\Controllers\EventController;
@@ -23,11 +24,26 @@ use App\Router;
 
 $router = new Router();
 
+/* ---- admin dashboard ------------------------------------------------- */
+// The dashboard owns '/'. Signed out it renders the sign-in form; signed in,
+// the overview. Everything here is HTML, not JSON — a browser handed the
+// API's error shape would render it as text.
+$router->get ('/',              [AdminController::class, 'index']);
+$router->post('/login',         [AdminController::class, 'login'], limit: ['adminlogin', 10, 300]);
+$router->post('/logout',        [AdminController::class, 'logout']);
+$router->get ('/sources',       [AdminController::class, 'sources']);
+$router->post('/sources/toggle',[AdminController::class, 'toggleSource']);
+$router->get ('/sync',          [AdminController::class, 'sync']);
+
 /* ---- status -------------------------------------------------------- */
-// What uptime monitoring polls. No auth, no rate limit: a limiter would
-// throttle the monitor itself and report an outage that is not happening.
-// Returns 503, not 200, when the database is unreachable.
-$router->get('/', [HealthController::class, 'index']);
+// Moved off '/' when the dashboard took it. What uptime monitoring polls —
+// no auth, no rate limit: a limiter would throttle the monitor itself and
+// report an outage that is not happening. Returns 503, not 200, when the
+// database is unreachable.
+//
+// The container healthcheck, deploy.sh and nginx all point here now. If you
+// move it again, move those three with it.
+$router->get('/health', [HealthController::class, 'index']);
 
 /* ---- legal ----------------------------------------------------------- */
 // Public, no auth, no rate limit. Both app stores require a reachable

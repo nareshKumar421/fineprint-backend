@@ -74,7 +74,7 @@ services:
       - ./deploy/apache-limits.conf:/etc/apache2/conf-enabled/zz-fineprint-limits.conf:ro
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${APP_PORT:-8081}/ >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${APP_PORT:-8081}/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
