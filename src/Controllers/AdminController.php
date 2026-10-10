@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Admin\Page;
 use App\ApiException;
 use App\Db;
 use App\Request;
@@ -25,40 +26,11 @@ use App\Services\Audit;
 use App\Services\Settings;
 use Throwable;
 
-final class AdminController
+final class AdminController extends Page
 {
-    private const VIEWS = __DIR__ . '/../Views/admin/';
-
     /* ---------------------------------------------------------------- */
-    /*  rendering                                                        */
+    /*  auth                                                             */
     /* ---------------------------------------------------------------- */
-
-    private function render(string $view, array $vars, string $title, string $active = ''): void
-    {
-        $admin = AdminAuth::current();
-        $vars['admin'] = $admin;
-        $vars['csrf']  = $_COOKIE[self::CSRF_COOKIE] ?? '';
-
-        extract($vars, EXTR_SKIP);
-        ob_start();
-        require self::VIEWS . $view . '.php';
-        $body = ob_get_clean();
-
-        ob_start();
-        require self::VIEWS . 'layout.php';
-        Response::html(ob_get_clean());
-    }
-
-    /**
-     * The CSRF token is held in a SECOND cookie, readable by the page.
-     *
-     * The session cookie is httponly and must stay that way. The CSRF token
-     * is not a credential — it is a value the attacker's page cannot read
-     * because of the same-origin policy, which is exactly what makes a
-     * cross-site POST fail. Keeping it separate means the session id is
-     * never exposed to the template.
-     */
-    private const CSRF_COOKIE = 'fp_admin_csrf';
 
     private static function setCsrfCookie(string $csrf): void
     {
@@ -73,27 +45,6 @@ final class AdminController
             'secure'   => str_starts_with(\App\Env::get('APP_URL', ''), 'https://'),
         ]);
     }
-
-    private static function redirect(string $to): void
-    {
-        if (!headers_sent()) {
-            header('Location: ' . $to, true, 302);
-        }
-
-        // The 302 MUST be passed through here. Response::html() calls
-        // http_response_code() itself and defaults to 200, which silently
-        // overwrites the status set above — leaving a 200 that carries a
-        // Location header. Browsers follow the meta-refresh below and it
-        // looks fine; anything stricter does not move.
-        Response::html(
-            '<meta http-equiv="refresh" content="0;url=' . htmlspecialchars($to) . '">',
-            302
-        );
-    }
-
-    /* ---------------------------------------------------------------- */
-    /*  auth                                                             */
-    /* ---------------------------------------------------------------- */
 
     /** GET / — the dashboard, or the sign-in form. */
     public function index(Request $request): void
@@ -144,14 +95,14 @@ final class AdminController
 
         AdminAuth::setCookie($result['session']);
         self::setCsrfCookie($result['csrf']);
-        self::redirect('/');
+        $this->redirect('/');
     }
 
     /** POST /logout */
     public function logout(Request $request): void
     {
         AdminAuth::logout();
-        self::redirect('/');
+        $this->redirect('/');
     }
 
     /* ---------------------------------------------------------------- */
@@ -266,7 +217,7 @@ final class AdminController
     /** GET /sources */
     public function sources(Request $request): void
     {
-        AdminAuth::require();
+        $this->admin();
 
         $this->render('sources', [
             'sources' => Db::all("
@@ -279,8 +230,6 @@ final class AdminController
                  GROUP BY b.id
                  ORDER BY b.is_active DESC, b.failure_count DESC, b.blog_name"),
             'maxFailures' => Settings::int('feed.max_failures', 5),
-            'flash'       => $_GET['msg'] ?? null,
-            'flashTone'   => $_GET['tone'] ?? 'ok',
             'active'      => 'sources',
         ], 'Sources', 'sources');
     }
@@ -288,13 +237,13 @@ final class AdminController
     /** POST /sources/toggle */
     public function toggleSource(Request $request): void
     {
-        $admin = AdminAuth::require();
-        AdminAuth::requireCsrf($_POST['csrf'] ?? null);
+        $admin = $this->admin();
+        $this->csrf();
 
         $id = (int) ($_POST['id'] ?? 0);
         $before = Db::one('SELECT id, blog_name, is_active, failure_count FROM blog_sources WHERE id = ?', [$id]);
         if ($before === null) {
-            self::redirect('/sources?msg=' . rawurlencode('No such source.') . '&tone=bad');
+            $this->redirect('/sources?msg=' . rawurlencode('No such source.') . '&tone=bad');
             return;
         }
 
@@ -319,14 +268,14 @@ final class AdminController
             'blog_sources', (string) $id, $before, ['is_active' => !$wasActive]);
 
         $name = (string) $before['blog_name'];
-        self::redirect('/sources?msg=' . rawurlencode(
+        $this->redirect('/sources?msg=' . rawurlencode(
             $wasActive ? "Disabled {$name}." : "Reactivated {$name} and cleared its failure count."));
     }
 
     /** GET /sync */
     public function sync(Request $request): void
     {
-        AdminAuth::require();
+        $this->admin();
 
         $last = Db::scalar('SELECT max(run_at) FROM sync_status');
 

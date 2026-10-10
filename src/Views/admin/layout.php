@@ -128,6 +128,8 @@
          display:flex;gap:.5rem;align-items:flex-start}
   .flash.ok{background:var(--t-green);color:var(--t-green-ink)}
   .flash.bad{background:var(--t-pink);color:var(--t-pink-ink)}
+  .flash.warn{background:#fff4d6;color:#92400e}
+  @media(prefers-color-scheme:dark){.flash.warn{background:#3a2d0b;color:#fcd34d}}
 
   button.btn{font:inherit;font-size:.8rem;font-weight:600;padding:.35rem .75rem;border-radius:8px;
              border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer}
@@ -180,6 +182,10 @@
   </div>
 </div>
 <?php endif; ?>
-<main><?= $body ?></main>
+<main>
+<?php if (!empty($flash)): ?>
+  <div class="flash <?= htmlspecialchars($flash['tone']) ?>"><span><?= htmlspecialchars($flash['text']) ?></span></div>
+<?php endif; ?>
+<?= $body ?></main>
 </body>
 </html>

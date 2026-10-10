@@ -1,8 +1,5 @@
-<?php /** @var array $sources @var string $csrf @var ?string $flash @var ?string $flashTone */ ?>
+<?php /** @var array $sources @var string $csrf */ ?>
 <h1>Sources</h1>
-<?php if ($flash !== null): ?>
-  <div class="flash <?= $flashTone === 'bad' ? 'bad' : 'ok' ?>"><?= htmlspecialchars($flash) ?></div>
-<?php endif; ?>
 
 <p class="muted" style="margin-top:-.5rem">
   The blogs FinePrint ingests from. A source is deactivated automatically
