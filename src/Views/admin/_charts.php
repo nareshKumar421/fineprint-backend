@@ -182,3 +182,55 @@ function fp_hbar(string $label, int $value, int $max, string $colour, string $su
          . '<span class="hbar-v">' . number_format($value) . fp_e($suffix) . '</span>'
          . '</div>';
 }
+
+/**
+ * Tiny area sparkline for a stat card. No axes, no labels, no gridlines —
+ * it shows the shape of the last fortnight, and the number beside it carries
+ * the value. A single point (or none) draws a flat baseline rather than
+ * nothing, so the card keeps its height on day one.
+ */
+function fp_spark(array $data, int $w = 120, int $h = 36, string $colour = '#1677ff'): string
+{
+    $values = array_values(array_map('intval', $data));
+    $labels = array_keys($data);
+    $n      = count($values);
+    $pad    = 2;                                   // keeps the 2px stroke inside the box
+    $plotH  = $h - $pad * 2;
+
+    if ($n < 2) {
+        $y = $h - $pad;
+        return '<svg viewBox="0 0 ' . $w . ' ' . $h . '" width="100%" height="' . $h
+             . '" preserveAspectRatio="none" role="img" aria-label="Trend (not enough history)">'
+             . '<line x1="0" y1="' . $y . '" x2="' . $w . '" y2="' . $y . '" stroke="' . $colour
+             . '" stroke-width="2" stroke-opacity=".35" stroke-linecap="round"/></svg>';
+    }
+
+    $max  = max(1, max($values));
+    $step = $w / ($n - 1);
+    $pts  = [];
+    foreach ($values as $i => $v) {
+        $pts[] = [round($i * $step, 1), round($pad + $plotH - ($v / $max) * $plotH, 1)];
+    }
+
+    $line = '';
+    foreach ($pts as $i => [$x, $y]) {
+        $line .= ($i === 0 ? 'M' : 'L') . $x . ' ' . $y . ' ';
+    }
+    $area = $line . 'L' . $pts[$n - 1][0] . ' ' . $h . ' L0 ' . $h . ' Z';
+    $id   = 's' . substr(md5($colour . $w . $h . $n), 0, 6);
+    [$lx, $ly] = $pts[$n - 1];
+
+    $title = fp_e((string) $labels[$n - 1]) . ': ' . number_format($values[$n - 1]);
+
+    return '<svg viewBox="0 0 ' . $w . ' ' . $h . '" width="100%" height="' . $h
+         . '" preserveAspectRatio="none" role="img" aria-label="Trend, last ' . $n . ' points">'
+         . '<defs><linearGradient id="' . $id . '" x1="0" x2="0" y1="0" y2="1">'
+         . '<stop offset="0%" stop-color="' . $colour . '" stop-opacity=".30"/>'
+         . '<stop offset="100%" stop-color="' . $colour . '" stop-opacity=".02"/>'
+         . '</linearGradient></defs>'
+         . '<path d="' . $area . '" fill="url(#' . $id . ')"/>'
+         . '<path d="' . $line . '" fill="none" stroke="' . $colour
+         . '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+         . '<circle cx="' . $lx . '" cy="' . $ly . '" r="2.5" fill="' . $colour . '"><title>' . $title . '</title></circle>'
+         . '</svg>';
+}

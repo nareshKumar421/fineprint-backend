@@ -51,14 +51,26 @@ abstract class Page
         $vars['active'] = $active;
         $vars['flash']  = $this->takeFlash();
 
-        extract($vars, EXTR_SKIP);
-        ob_start();
-        require self::VIEWS . $view . '.php';
-        $body = ob_get_clean();
+        /*
+         * Each template runs inside its own closure so its locals cannot leak
+         * into the layout. Without this a view that sets $active for its own
+         * tabs silently changed which sidebar item was highlighted — found in
+         * review, and invisible in any single page's test.
+         */
+        $include = static function (string $file, array $vars): string {
+            extract($vars, EXTR_SKIP);
+            ob_start();
+            require $file;
+            return (string) ob_get_clean();
+        };
 
-        ob_start();
-        require self::VIEWS . 'layout.php';
-        Response::html(ob_get_clean());
+        $body = $include(self::VIEWS . $view . '.php', $vars);
+
+        // The layout needs the title too. It was a method-scope local before
+        // the closure existed, and the closure sees only what it is handed.
+        $vars['body']  = $body;
+        $vars['title'] = $title;
+        Response::html($include(self::VIEWS . 'layout.php', $vars));
     }
 
     /**

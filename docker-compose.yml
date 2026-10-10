@@ -72,10 +72,6 @@ services:
       # database, so 16 mod_php children would reach swap under ordinary
       # load and show up as latency rather than an error.
       - ./deploy/apache-limits.conf:/etc/apache2/conf-enabled/zz-fineprint-limits.conf:ro
-      # Backups written by the dashboard's backup job land on the HOST, not in
-      # the container's writable layer — a backup that dies with the container
-      # is not a backup.
-      - ../backups:/var/www/html/backups
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${APP_PORT:-8081}/health >/dev/null || exit 1"]
