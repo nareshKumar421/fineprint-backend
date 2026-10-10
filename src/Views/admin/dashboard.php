@@ -1,76 +1,116 @@
 <?php
-/** @var array $m metrics @var array $warnings @var array $recentSync @var array $recentAudit */
-$pill = static fn(string $tone, string $text): string =>
-    '<span class="pill ' . $tone . '">' . htmlspecialchars($text) . '</span>';
+require_once __DIR__ . '/_charts.php';
+/** @var array $m @var array $warnings @var array $ingest @var array $syncSeries
+ *  @var array $categories @var array $topSources @var array $health @var array $recentSync */
+$colors = fp_palette();
+$pct = static fn(int $part, int $whole): string =>
+    $whole > 0 ? round($part / $whole * 100) . '% of total' : '—';
 ?>
-<h1>Overview</h1>
+<div class="head">
+  <h1>Overview</h1>
+  <span class="sub"><?= htmlspecialchars($m['window_label']) ?></span>
+</div>
 
 <?php foreach ($warnings as $w): ?>
-  <div class="flash bad"><?= htmlspecialchars($w) ?></div>
+  <div class="flash bad"><strong>!</strong><span><?= htmlspecialchars($w) ?></span></div>
 <?php endforeach; ?>
 
-<div class="grid">
-  <div class="card">
-    <div class="n"><?= number_format($m['articles']) ?></div>
-    <div class="l">Articles</div>
-    <div class="s muted"><?= number_format($m['in_window']) ?> in the 30-day window</div>
+<div class="kpis">
+  <div class="kpi fill">
+    <div class="k-l">Total articles</div>
+    <div class="k-n"><?= number_format($m['articles']) ?></div>
+    <div class="k-s"><?= number_format($m['in_window']) ?> in the 30-day window</div>
   </div>
-  <div class="card">
-    <div class="n"><?= $m['sources_active'] ?></div>
-    <div class="l">Active sources</div>
-    <div class="s">
-      <?= $m['sources_dead'] > 0 ? $pill('bad', $m['sources_dead'] . ' deactivated') : $pill('ok', 'none deactivated') ?>
-    </div>
+  <div class="kpi cyan">
+    <div class="k-l">Active sources</div>
+    <div class="k-n"><?= $m['sources_active'] ?></div>
+    <div class="k-s"><?= $pct((int) $m['sources_active'], (int) $m['sources_total']) ?></div>
   </div>
-  <div class="card">
-    <div class="n"><?= $m['sources_failing'] ?></div>
-    <div class="l">Failing feeds</div>
-    <div class="s"><?= $m['sources_failing'] > 0 ? $pill('warn', 'needs attention') : $pill('ok', 'all healthy') ?></div>
+  <div class="kpi green">
+    <div class="k-l">Ingested today</div>
+    <div class="k-n"><?= number_format($m['today']) ?></div>
+    <div class="k-s"><?= number_format((int) $m['avg_day']) ?>/day average</div>
   </div>
-  <div class="card">
-    <div class="n"><?= $m['users'] ?></div>
-    <div class="l">Readers</div>
-    <div class="s muted"><?= $m['warm'] ?> personalised</div>
+  <div class="kpi pink">
+    <div class="k-l">Needs attention</div>
+    <div class="k-n"><?= $m['sources_dead'] + $m['sources_failing'] ?></div>
+    <div class="k-s"><?= $m['sources_dead'] ?> off, <?= $m['sources_failing'] ?> failing</div>
   </div>
-  <div class="card">
-    <div class="n"><?= number_format($m['events']) ?></div>
-    <div class="l">Interactions</div>
-    <div class="s muted"><?= number_format($m['events_24h']) ?> in 24h</div>
-  </div>
-  <div class="card">
-    <div class="n" style="font-size:1.05rem"><?= htmlspecialchars($m['last_sync_human']) ?></div>
-    <div class="l">Last sync</div>
-    <div class="s"><?= $m['sync_stale'] ? $pill('warn', 'stale') : $pill('ok', 'current') ?></div>
+  <div class="kpi violet">
+    <div class="k-l">Readers</div>
+    <div class="k-n"><?= number_format($m['users']) ?></div>
+    <div class="k-s"><?= number_format($m['events']) ?> interactions logged</div>
   </div>
 </div>
 
-<h1 style="font-size:1.1rem">Recent syncs</h1>
-<table style="margin-bottom:1.5rem">
-  <tr><th>When</th><th class="right">OK</th><th class="right">Failed</th>
-      <th class="right">Added</th><th class="right">Duration</th></tr>
-  <?php foreach ($recentSync as $s): ?>
-  <tr>
-    <td><?= htmlspecialchars(substr((string) $s['run_at'], 0, 16)) ?></td>
-    <td class="right"><?= (int) $s['feeds_ok'] ?></td>
-    <td class="right"><?= ((int) $s['feeds_failed']) > 0
-        ? $pill('bad', (string) $s['feeds_failed']) : '<span class="muted">0</span>' ?></td>
-    <td class="right"><?= number_format((int) $s['articles_added']) ?></td>
-    <td class="right muted"><?= (int) $s['duration_seconds'] ?>s</td>
-  </tr>
-  <?php endforeach; ?>
-  <?php if ($recentSync === []): ?><tr><td colspan="5" class="muted">No syncs recorded yet.</td></tr><?php endif; ?>
-</table>
+<div class="row2">
+  <div class="card">
+    <div class="card-h">
+      <h2>Articles ingested</h2>
+      <!-- One range of history exists, so the other two are not offered as
+           controls that would do nothing. -->
+      <div class="seg"><span class="on">14 days</span></div>
+    </div>
+    <?= fp_bars($ingest, 200) ?>
+  </div>
 
-<h1 style="font-size:1.1rem">Recent administrative activity</h1>
-<table>
-  <tr><th>When</th><th>Who</th><th>Action</th><th>Entity</th></tr>
-  <?php foreach ($recentAudit as $a): ?>
-  <tr>
-    <td class="muted"><?= htmlspecialchars(substr((string) $a['created_at'], 0, 16)) ?></td>
-    <td><?= htmlspecialchars((string) ($a['actor_email'] ?? 'system')) ?></td>
-    <td><code><?= htmlspecialchars((string) $a['action']) ?></code></td>
-    <td class="muted"><?= htmlspecialchars((string) ($a['entity'] ?? '—')) ?></td>
-  </tr>
-  <?php endforeach; ?>
-  <?php if ($recentAudit === []): ?><tr><td colspan="4" class="muted">Nothing recorded yet.</td></tr><?php endif; ?>
-</table>
+  <div class="card">
+    <div class="card-h">
+      <h2>Sync throughput</h2>
+      <div class="seg"><span class="on">Per run</span></div>
+    </div>
+    <?= fp_line($syncSeries, 200, '#34d399') ?>
+  </div>
+</div>
+
+<div class="row3">
+  <div class="card">
+    <div class="card-h"><h2>Categories</h2><a class="act" href="/sources">Sources →</a></div>
+    <div class="donut">
+      <?= fp_donut($categories) ?>
+      <div class="legend">
+        <?php $i = 0; $catTotal = array_sum($categories); foreach ($categories as $name => $n): ?>
+          <div class="lg">
+            <i style="background:<?= $colors[$i % count($colors)] ?>"></i>
+            <?= htmlspecialchars((string) $name) ?>
+            <b><?= $catTotal > 0 ? round($n / $catTotal * 100) : 0 ?>%</b>
+          </div>
+        <?php $i++; endforeach; ?>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>Top sources</h2><a class="act" href="/sources">See all →</a></div>
+    <?php $maxSrc = $topSources === [] ? 1 : max($topSources); $i = 0;
+          foreach ($topSources as $name => $n):
+            echo fp_hbar((string) $name, (int) $n, (int) $maxSrc, $colors[$i % count($colors)]);
+            $i++;
+          endforeach; ?>
+    <?php if ($topSources === []): ?><p class="muted">No articles yet.</p><?php endif; ?>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>Source health</h2><a class="act" href="/sync">Sync →</a></div>
+    <?php
+      $hTotal = max(1, array_sum($health));
+      $hColors = ['healthy' => '#34d399', 'failing' => '#fbbf24', 'deactivated' => '#f472b6'];
+      foreach ($health as $state => $n) {
+          echo fp_hbar(ucfirst((string) $state), (int) $n, (int) $hTotal,
+                       $hColors[$state] ?? '#94a3b8');
+      }
+    ?>
+    <table style="margin-top:1rem">
+      <tr><th>Recent sync</th><th class="right">Added</th><th class="right">Failed</th></tr>
+      <?php foreach (array_slice($recentSync, 0, 4) as $s): ?>
+      <tr>
+        <td class="muted"><?= htmlspecialchars(substr((string) $s['run_at'], 0, 10)) ?></td>
+        <td class="right"><?= number_format((int) $s['articles_added']) ?></td>
+        <td class="right"><?= ((int) $s['feeds_failed']) > 0
+            ? '<span class="pill warn">' . (int) $s['feeds_failed'] . '</span>'
+            : '<span class="muted">0</span>' ?></td>
+      </tr>
+      <?php endforeach; ?>
+    </table>
+  </div>
+</div>
