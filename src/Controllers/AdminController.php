@@ -79,7 +79,16 @@ final class AdminController
         if (!headers_sent()) {
             header('Location: ' . $to, true, 302);
         }
-        Response::html('<meta http-equiv="refresh" content="0;url=' . htmlspecialchars($to) . '">');
+
+        // The 302 MUST be passed through here. Response::html() calls
+        // http_response_code() itself and defaults to 200, which silently
+        // overwrites the status set above — leaving a 200 that carries a
+        // Location header. Browsers follow the meta-refresh below and it
+        // looks fine; anything stricter does not move.
+        Response::html(
+            '<meta http-equiv="refresh" content="0;url=' . htmlspecialchars($to) . '">',
+            302
+        );
     }
 
     /* ---------------------------------------------------------------- */
