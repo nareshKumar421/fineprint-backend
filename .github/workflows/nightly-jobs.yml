@@ -1,0 +1,86 @@
+# ============================================================
+#  Did the nightly pipeline run?
+#
+#  The pipeline itself — fetch_feeds, rollup_stats, purge_sessions,
+#  pipeline_report — runs on the server, from cron, at 03:10 UTC
+#  (~/fineprint/sync.sh, installed by deploy.sh). It no longer runs here:
+#  the database is bound to the server's loopback and is not reachable
+#  from a GitHub runner, and there is nothing a runner could add except a
+#  second copy of the credentials.
+#
+#  What this workflow does instead is ASK the server whether last night
+#  happened. /health reports the newest sync_status row; if it is older
+#  than 6 hours at 04:00 UTC, the 03:10 cron did not run or did not
+#  finish, and this run fails — which is the point: GitHub emails the
+#  account that last edited this file, so a silent nightly outage becomes
+#  a notification. A cron that stops is invisible otherwise.
+#
+#  WITHOUT THE NIGHTLY the feed still works but stops learning: every
+#  reader stays on the cold-start formula and nothing new is collected.
+#
+#  No secrets: /health is public and returns nothing sensitive.
+#  Disabling sync.enabled in the dashboard will, correctly, trip this.
+# ============================================================
+name: nightly-jobs
+
+on:
+  schedule:
+    # 04:00 UTC — 50 minutes after the server's 03:10 cron. A full fetch
+    # across 76 feeds takes ~100 s; the margin is for slow upstreams and
+    # GitHub's best-effort scheduler, which can lag by several minutes.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Fetch /health
+        run: |
+          for attempt in 1 2 3; do
+            if curl -sS --max-time 30 -o health.json https://fineprint.nareshkumar.online/health; then
+              break
+            fi
+            echo "attempt $attempt failed"; sleep 20
+          done
+          [ -s health.json ] || { echo "::error::no answer from /health after 3 attempts"; exit 1; }
+          cat health.json; echo
+
+      - name: Verify last night's sync
+        run: |
+          status=$(jq -r '.status'                health.json)
+          db=$(jq -r '.database'                  health.json)
+          last=$(jq -r '.content.last_sync_at'    health.json)
+          articles=$(jq -r '.content.articles'    health.json)
+
+          if [ "$status" != "ok" ] || [ "$db" != "up" ]; then
+            echo "::error::service unhealthy — status=$status database=$db"; exit 1
+          fi
+          if [ "$last" = "null" ] || [ -z "$last" ]; then
+            echo "::error::no sync has ever been recorded"; exit 1
+          fi
+
+          # Scheduled at 04:00: last night's 03:10 run must be the newest, so
+          # anything older than 6 h means it did not happen (a manual "Sync
+          # now" the previous evening cannot mask it). Run by hand at any
+          # hour, the question is only "has it run in the last day".
+          max_h=6; [ "$GITHUB_EVENT_NAME" = "schedule" ] || max_h=26
+
+          age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+          printf 'last sync %s — %dh %02dm ago (limit %dh); %s articles\n' "$last" $((age/3600)) $((age%3600/60)) "$max_h" "$articles"
+          {
+            echo "| | |"; echo "|---|---|"
+            echo "| last sync | $last |"
+            echo "| age | $((age/3600))h $((age%3600/60))m |"
+            echo "| articles | $articles |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$age" -gt $((max_h * 3600)) ]; then
+            echo "::error::last sync is $((age/3600))h old (limit ${max_h}h) — the 03:10 UTC cron on the server did not run or did not finish. See ~/fineprint/logs/sync.log on the host."
+            exit 1
+          fi
+          echo "the nightly pipeline ran"

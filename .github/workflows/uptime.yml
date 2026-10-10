@@ -1,0 +1,51 @@
+# ============================================================
+#  Is FinePrint up?
+#
+#  Successor to keep-warm.yml. That one pinged every 10 minutes so Render's
+#  free tier would not put the container to sleep. The VPS does not sleep,
+#  so there is nothing to keep warm — but the ping was also the only thing
+#  that noticed an outage, and that half is worth keeping.
+#
+#  Every 15 minutes: /health must answer 200 with database "up". It is the
+#  app's own verdict, so a 503 here means the app is up and its database is
+#  not — still an outage for every reader, still a failure. Three attempts
+#  20 s apart ride out a deploy restart (container healthy in ~6 s) without
+#  a false alarm.
+#
+#  A failed run emails the GitHub account that last edited this file. The
+#  health endpoint is public and returns no secrets, so no credentials.
+#  GitHub pauses scheduled workflows in a repository with no commits for 60
+#  days; the Actions tab shows a banner and a button when that happens.
+# ============================================================
+name: uptime
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Probe /health
+        run: |
+          code=000
+          for attempt in 1 2 3; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 30 \
+              https://fineprint.nareshkumar.online/health || echo 000)
+            db=$(jq -r '.database // empty' body.json 2>/dev/null || true)
+            echo "attempt $attempt -> HTTP $code, database=${db:-?}"
+            if [ "$code" = "200" ] && [ "$db" = "up" ]; then
+              echo "up — $(jq -r '.content.articles' body.json) articles, $(jq -r '.response_ms' body.json) ms"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::FinePrint did not answer healthy after 3 attempts (last HTTP $code)"
+          cat body.json 2>/dev/null || true
+          exit 1

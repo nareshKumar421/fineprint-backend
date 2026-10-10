@@ -1,8 +1,9 @@
 # Deployment — fineprint.nareshkumar.online
 
 The self-hosted deployment, alongside an unrelated application on the same
-box. For the Render/Neon deployment that still serves the mobile app, see
-[deployment.md](deployment.md).
+box. This is the only backend; the mobile app talks to it. The retired
+Render/Neon deployment is described in [deployment.md](deployment.md), kept
+for the reasons that outlived it.
 
 ## What runs where
 
@@ -92,6 +93,28 @@ that comes round again.
 
 Run it by hand any time: `~/fineprint/sync.sh && tail -40 ~/fineprint/logs/sync.log`
 
+A cron that stops is invisible from the box itself. The two GitHub Actions
+workflows below exist to notice; neither can run the pipeline, because the
+database is bound to the server's loopback and a runner cannot reach it.
+
+## Monitoring (GitHub Actions)
+
+| Workflow | When | What |
+|---|---|---|
+| `nightly-jobs.yml` | 04:00 UTC daily | Reads `/health`; fails if the newest sync is older than 6 h — i.e. the 03:10 cron did not run or did not finish. Run by hand it asks the looser question, "has it run in the last day". |
+| `uptime.yml` | every 15 min | `/health` must answer 200 with `database: up`; three attempts 20 s apart ride out a deploy restart. |
+
+Both are credential-free (`/health` is public and returns nothing sensitive)
+and both report by failing: GitHub emails the account that last edited the
+workflow file. GitHub pauses scheduled workflows in a repository with no
+commits for 60 days — the Actions tab shows a banner and a re-enable button.
+
+A sync that finishes with some feeds failing exits 2. That is the normal
+state of a 76-feed corpus — a publisher is always down somewhere — so the
+job queue records it as **done**, with the failure count in the summary; the
+Sources page lists which ones. Exit 1 is a fatal error and is recorded as
+failed.
+
 ## Backups
 
 **This is now yours.** Neon did it; a self-hosted database does not.
@@ -101,7 +124,9 @@ docker exec portfolio-db-1 pg_dump -U fineprint -h 127.0.0.1 \
   -d fineprint --no-owner -Fc > fineprint-$(date +%F).dump
 ```
 
-Nothing schedules this yet — see the open items in the handover.
+Nothing schedules this, by decision — dumps were taken out of scope on
+2026-10-10, and the dashboard neither takes nor tracks them. The recipe above
+is the whole procedure if that changes.
 
 Restore:
 
