@@ -70,6 +70,8 @@ $router->get ('/users',                    [Admin\UsersController::class, 'index
 $router->get ('/users/view',               [Admin\UsersController::class, 'view']);
 $router->get ('/users/new',                [Admin\UsersController::class, 'new']);
 $router->post('/users/create',             [Admin\UsersController::class, 'create']);
+$router->get ('/users/edit',               [Admin\UsersController::class, 'edit']);
+$router->post('/users/update',             [Admin\UsersController::class, 'update']);
 $router->post('/users/toggle-active',      [Admin\UsersController::class, 'toggleActive']);
 $router->post('/users/role',               [Admin\UsersController::class, 'role']);
 $router->post('/users/revoke-sessions',    [Admin\UsersController::class, 'revokeSessions']);

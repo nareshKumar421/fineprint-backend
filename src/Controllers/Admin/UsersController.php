@@ -5,7 +5,8 @@
  * One table, two kinds of account: `role` is 'reader' or 'admin'. Everything
  * here is about the account itself — who it is, what it has done, and the
  * three levers an administrator has over it (active, role, sessions) plus
- * deletion.
+ * deletion — and one form, /users/edit, that changes anything at once:
+ * email, name, password, role, status, topics, hidden sources.
  *
  * Three rules that the API never needed, because the API only ever acts on
  * the caller's OWN account:
@@ -320,6 +321,229 @@ final class UsersController extends Page
 
         $this->redirect('/users/view?id=' . $id,
             'Created ' . ($role === 'admin' ? 'administrator ' : 'reader ') . $email . '.');
+    }
+
+    /* ---------------------------------------------------------------- */
+    /*  edit                                                             */
+    /* ---------------------------------------------------------------- */
+
+    /** GET /users/edit?id= */
+    public function edit(Request $request): void
+    {
+        $admin = $this->admin();
+
+        $id = $this->intParam('id');
+        $u  = $id === null ? null : self::row($id);
+        if ($u === null) {
+            $this->redirect('/users', 'No such user.', 'bad');
+            return;
+        }
+
+        $this->editForm($admin, $u, null, [
+            'email'          => $u['email'],
+            'display_name'   => (string) ($u['display_name'] ?? ''),
+            'role'           => $u['role'],
+            'is_active'      => self::truthy($u['is_active']),
+            'email_verified' => self::truthy($u['email_verified']),
+            'topics'         => self::topicIds($id),
+        ]);
+    }
+
+    private function editForm(array $admin, array $u, ?string $error, array $values): void
+    {
+        $id = (int) $u['id'];
+        $this->render('users/edit', [
+            'u'          => $u,
+            'values'     => $values,
+            'categories' => Db::all('SELECT id, name, is_active FROM category_master ORDER BY display_order, name'),
+            'hidden'     => Db::all('
+                SELECT b.id, b.blog_name
+                  FROM user_hidden_sources h JOIN blog_sources b ON b.id = h.source_id
+                 WHERE h.user_id = ? ORDER BY b.blog_name', [$id]),
+            'isSelf'     => $id === (int) $admin['id'],
+            'minLen'     => self::PASSWORD_MIN,
+            'error'      => $error,
+        ], 'Edit ' . (trim((string) ($u['display_name'] ?? '')) ?: (string) $u['email']), 'users');
+    }
+
+    /**
+     * POST /users/update
+     *   {id, email, display_name, role, is_active?, email_verified?, password?, topics[]?, unhide[]?}
+     *
+     * One form for everything an administrator can change about an account,
+     * where the single-purpose buttons on the account page each change one
+     * thing. The same three rules apply — your own role and status are
+     * locked, the last active administrator stays one — and the same
+     * consequences follow: disabling, demoting or resetting the password
+     * revokes the credentials that would otherwise outlive the change, in
+     * the transaction that makes it.
+     */
+    public function update(Request $request): void
+    {
+        $admin = $this->admin();
+        $this->csrf();
+
+        $id     = $this->intParam('id', $_POST);
+        $before = $id === null ? null : self::row($id);
+        if ($before === null) {
+            $this->redirect('/users', 'No such user.', 'bad');
+            return;
+        }
+        $isSelf = $id === (int) $admin['id'];
+
+        $email    = trim(self::ps('email'));
+        $name     = trim(self::ps('display_name'));
+        $password = self::ps('password');
+        // A disabled control is not submitted, and for your own account the
+        // role and status controls are disabled: keep the row's values.
+        $role     = $isSelf ? (string) $before['role'] : self::ps('role', (string) $before['role']);
+        $active   = $isSelf ? self::truthy($before['is_active']) : isset($_POST['is_active']);
+        $verified = isset($_POST['email_verified']);
+        $topics   = self::idList($_POST['topics'] ?? []);
+        $unhide   = self::idList($_POST['unhide'] ?? []);
+
+        $values = ['email' => $email, 'display_name' => $name, 'role' => $role,
+                   'is_active' => $active, 'email_verified' => $verified, 'topics' => $topics];
+        $fail = fn(string $msg) => $this->editForm($admin, $before, $msg, $values);
+
+        if ($email === '' || strlen($email) > 255 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            $fail('Enter a valid email address.');
+            return;
+        }
+        if (mb_strlen($name) > 80) {
+            $fail('The display name is too long (80 characters at most).');
+            return;
+        }
+        if (!in_array($role, self::ROLES, true)) {
+            $fail('Choose a role.');
+            return;
+        }
+        if ($password !== '' && mb_strlen($password) < self::PASSWORD_MIN) {
+            $fail('The new password must be at least ' . self::PASSWORD_MIN . ' characters.');
+            return;
+        }
+        if (Db::scalar('SELECT 1 FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?', [$email, $id]) !== null) {
+            $fail('Another account already uses that email.');
+            return;
+        }
+        // AdminAuth signs an administrator in by display name, so among
+        // administrators a name must be unambiguous.
+        if ($role === 'admin' && $name !== '') {
+            $clash = Db::scalar(
+                "SELECT email FROM users WHERE role = 'admin' AND LOWER(display_name) = LOWER(?) AND id <> ?",
+                [$name, $id]);
+            if ($clash !== null) {
+                $fail("Another administrator already signs in as '{$name}' ({$clash}). Choose a different display name.");
+                return;
+            }
+        }
+
+        $wasActive = self::truthy($before['is_active']);
+        $demoting  = $before['role'] === 'admin' && $role === 'reader';
+        $disabling = $wasActive && !$active;
+        if (($demoting || $disabling) && self::isLastActiveAdmin($before)) {
+            $fail('This is the last active administrator. Promote someone else before demoting or disabling it.');
+            return;
+        }
+
+        // Only categories that exist; the form cannot send others, a crafted
+        // request can.
+        $known  = array_map('intval', array_column(Db::all('SELECT id FROM category_master'), 'id'));
+        $topics = array_values(array_intersect($topics, $known));
+        $oldTopics = self::topicIds($id);
+        $hash   = $password === '' ? null : password_hash($password, PASSWORD_BCRYPT);
+
+        try {
+            [$tokens, $sessions, $unhidden] = Db::transaction(function () use (
+                $id, $email, $name, $role, $active, $verified, $hash, $topics, $oldTopics, $unhide,
+                $disabling, $demoting, $isSelf, $admin
+            ): array {
+                Db::exec(
+                    'UPDATE users SET email = ?, display_name = ?, role = ?,
+                                      is_active = ?::boolean, email_verified = ?::boolean
+                      WHERE id = ?',
+                    [$email, $name === '' ? null : $name, $role,
+                     $active ? 'true' : 'false', $verified ? 'true' : 'false', $id]);
+                if ($hash !== null) {
+                    Db::exec('UPDATE users SET password_hash = ? WHERE id = ?', [$hash, $id]);
+                }
+
+                $tokens = $sessions = 0;
+                if ($disabling || $hash !== null) {
+                    $tokens = Db::exec('DELETE FROM user_tokens WHERE user_id = ?', [$id]);
+                }
+                if ($disabling || $demoting || $hash !== null) {
+                    $sessions = $isSelf
+                        ? Db::exec('DELETE FROM admin_sessions WHERE user_id = ? AND id <> ?', [$id, $admin['session_id']])
+                        : Db::exec('DELETE FROM admin_sessions WHERE user_id = ?', [$id]);
+                }
+
+                foreach (array_diff($oldTopics, $topics) as $cid) {
+                    Db::exec('DELETE FROM user_categories WHERE user_id = ? AND category_id = ?', [$id, $cid]);
+                }
+                foreach (array_diff($topics, $oldTopics) as $cid) {
+                    Db::exec('INSERT INTO user_categories (user_id, category_id) VALUES (?, ?)', [$id, $cid]);
+                }
+
+                $unhidden = 0;
+                foreach ($unhide as $sid) {
+                    $unhidden += Db::exec('DELETE FROM user_hidden_sources WHERE user_id = ? AND source_id = ?', [$id, $sid]);
+                }
+                return [$tokens, $sessions, $unhidden];
+            });
+        } catch (PDOException $e) {
+            if ($e->getCode() === '23505') {          // the email check above raced another write
+                $fail('Another account already uses that email.');
+                return;
+            }
+            throw $e;
+        }
+
+        $after = self::row($id) ?? $before;
+        Audit::record($admin['id'], $admin['email'], 'user.update', 'users', (string) $id,
+            $before + ['topics' => $oldTopics],
+            $after + ['topics' => $topics, 'password_reset' => $hash !== null,
+                      'tokens_revoked' => $tokens, 'sessions_revoked' => $sessions, 'unhidden' => $unhidden]);
+
+        $changes = [];
+        if ((string) $before['email'] !== $email)                       { $changes[] = 'email'; }
+        if (trim((string) ($before['display_name'] ?? '')) !== $name)    { $changes[] = 'display name'; }
+        if ($before['role'] !== $role)                                   { $changes[] = 'role → ' . $role; }
+        if ($wasActive !== $active)                                      { $changes[] = $active ? 'enabled' : 'disabled'; }
+        if (self::truthy($before['email_verified']) !== $verified)       { $changes[] = $verified ? 'email verified' : 'email unverified'; }
+        if ($hash !== null)                                              { $changes[] = 'password reset'; }
+        if ($topics != $oldTopics)                                       { $changes[] = 'topics (' . count($topics) . ')'; }
+        if ($unhidden > 0)                                               { $changes[] = "unhid {$unhidden} source(s)"; }
+
+        if ($changes === []) {
+            $this->redirect('/users/view?id=' . $id, 'Nothing changed.', 'warn');
+            return;
+        }
+        $note = $tokens + $sessions > 0 ? " Ended {$tokens} mobile token(s) and {$sessions} dashboard session(s)." : '';
+        $this->redirect('/users/view?id=' . $id, 'Saved ' . $email . ': ' . implode(', ', $changes) . '.' . $note);
+    }
+
+    /** @return int[] the user's category ids, ascending */
+    private static function topicIds(int $id): array
+    {
+        return array_map('intval', array_column(
+            Db::all('SELECT category_id FROM user_categories WHERE user_id = ? ORDER BY category_id', [$id]),
+            'category_id'));
+    }
+
+    /** Positive integers from a submitted list, de-duplicated; anything else is dropped. */
+    private static function idList(mixed $v): array
+    {
+        if (!is_array($v)) {
+            return [];
+        }
+        $out = [];
+        foreach ($v as $x) {
+            if ((is_int($x) || (is_string($x) && ctype_digit($x))) && (int) $x > 0) {
+                $out[(int) $x] = (int) $x;
+            }
+        }
+        return array_values($out);
     }
 
     /* ---------------------------------------------------------------- */

@@ -90,6 +90,11 @@ $typeColour = ['impression' => '#94a3b8', 'tap' => '#2563eb', 'share' => '#34d39
     <div class="card-h"><h2>Actions</h2></div>
     <div style="display:flex;flex-direction:column;gap:.6rem">
 
+      <div style="padding-bottom:.8rem;border-bottom:1px solid var(--line)">
+        <a class="btn primary" href="/users/edit?id=<?= $id ?>">Edit account</a>
+        <span class="muted" style="font-size:.78rem;margin-left:.5rem">Email, name, password, role, status, topics, hidden sources — in one form.</span>
+      </div>
+
       <form method="post" action="/users/toggle-active"
             onsubmit="return confirm(<?= $e(json_encode($active
                 ? "Disable {$u['email']}? Every mobile token and dashboard session is revoked at once."
