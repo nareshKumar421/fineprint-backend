@@ -24,7 +24,7 @@ cd "$ROOT"
 
 IMAGE=${IMAGE:-fineprint-backend:local}
 CONTAINER=fineprint-local
-PROD_URL=https://fineprint-backend-gsgu.onrender.com
+PROD_URL=https://fineprint.nareshkumar.online
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  \033[32m[PASS]\033[0m %s\n' "$1"; }
