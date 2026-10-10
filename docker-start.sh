@@ -55,7 +55,17 @@ echo "start.sh: PORT=${PORT}"
 #
 # The guard keeps the image runnable where IPv6 is genuinely absent —
 # Apache exits rather than starts degraded if it cannot bind.
-if [ -f /proc/net/if_inet6 ]; then
+# BIND_ADDR narrows what Apache listens on.
+#
+# Unset (the default, and what Railway/Render need) it binds every
+# interface, exactly as before. Set to 127.0.0.1 it binds loopback only,
+# which is what the shared-host deployment requires: that container runs
+# with host networking so it can reach a Postgres bound to 127.0.0.1, and
+# host networking means an all-interfaces bind would publish the app
+# straight to the internet — past nginx, past TLS, past the access log.
+if [ -n "${BIND_ADDR:-}" ]; then
+    LISTEN="Listen ${BIND_ADDR}:${PORT}"
+elif [ -f /proc/net/if_inet6 ]; then
     LISTEN="Listen [::]:${PORT}"
 else
     LISTEN="Listen ${PORT}"
