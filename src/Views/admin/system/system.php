@@ -1,7 +1,7 @@
 <?php
 require_once __DIR__ . '/../_charts.php';
 /** @var string $php @var string $os @var string $sapi @var array $db @var array $tables
- *  @var ?array $lastSync @var array $jobs @var array $backups @var ?int $uptime
+ *  @var ?array $lastSync @var array $jobs @var ?int $uptime
  *  @var bool $syncEnabled @var array $env @var array $checks @var string $appEnv */
 use App\Controllers\Admin\SystemController as S;
 
@@ -136,28 +136,6 @@ $jobTone   = static fn(string $s): string => match ($s) {
       <?php endforeach; ?>
     </ol>
     <?php endif; ?>
-  </div>
-
-  <div class="card">
-    <div class="card-h">
-      <h2>Backups</h2>
-      <span class="pill <?= $backups['writable'] ? 'ok' : 'bad' ?>"><?= $backups['exists'] ? ($backups['writable'] ? 'writable' : 'read-only') : 'missing' ?></span>
-    </div>
-    <table>
-      <tr><td class="muted">Path</td><td class="right"><code style="font-size:.78rem;word-break:break-all"><?= $e($backups['path']) ?></code></td></tr>
-      <tr><td class="muted">Files</td><td class="right"><?= number_format((int) $backups['files']) ?></td></tr>
-      <tr><td class="muted">Size on disk</td><td class="right"><?= $e(S::bytes($backups['bytes'])) ?></td></tr>
-      <tr><td class="muted">Latest file</td>
-          <td class="right"><?= $backups['latest_name'] === null ? '<span class="muted">—</span>'
-              : $e($backups['latest_name']) . '<br><span class="muted" style="font-size:.78rem">'
-                . $e(gmdate('Y-m-d H:i', (int) $backups['latest_mtime'])) . ' UTC</span>' ?></td></tr>
-      <tr><td class="muted">Disk free</td>
-          <td class="right"><?= $backups['free'] === null ? '<span class="muted">unknown</span>' : $e(S::bytes($backups['free'])) ?></td></tr>
-    </table>
-    <p class="muted" style="margin:.8rem 0 0;font-size:.8rem">
-      Inside the container this is <code>/var/www/html/backups</code>, bind-mounted
-      from the host so a dump outlives the container. <code>BACKUP_DIR</code> overrides.
-    </p>
   </div>
 
   <div class="card">

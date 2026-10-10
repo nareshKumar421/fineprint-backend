@@ -1,21 +1,16 @@
 <?php
 /**
- * JobsController — the queue, the Sync pages it replaces, and backups.
+ * JobsController — the queue and the Sync pages it replaces.
  *
- * Some operations outlast a web request: a full feed sync runs ~100 s, a
- * database dump longer. Every button here INSERTs a row into admin_jobs and
- * spawns jobs/run_job.php detached, so the request returns at once and the
+ * Some operations outlast a web request: a full feed sync runs ~100 s.
+ * Every button here INSERTs a row into admin_jobs and spawns
+ * jobs/run_job.php detached, so the request returns at once and the
  * row carries the progress. The detail page refreshes itself while the job
  * is live, which gives an operator visible progress with no JavaScript.
  *
  * Overlap is refused at the database: the partial unique index on
  * admin_jobs allows ONE queued/running row per type, and the controller
  * turns that violation into a flash that names the live job.
- *
- * /backups/download is the one route in the dashboard that does not render
- * HTML. The file name is validated against a strict pattern AND resolved
- * with realpath inside the backups directory, so a crafted name cannot
- * reach anything else on disk.
  */
 
 declare(strict_types=1);
@@ -54,8 +49,6 @@ final class JobsController extends Page
         'validate_feed' => 'Fetch and parse this feed URL?',
     ];
 
-    private const BACKUP_NAME = '/^fineprint-[0-9-]+\.dump$/';
-
     /** The queued/running/done/failed/cancelled pill tones. */
     public const TONES = ['queued' => 'info', 'running' => 'warn', 'done' => 'ok', 'failed' => 'bad', 'cancelled' => 'muted'];
 
@@ -67,11 +60,6 @@ final class JobsController extends Page
     private static function root(): string
     {
         return realpath(__DIR__ . '/../../..') ?: dirname(__DIR__, 3);
-    }
-
-    private static function backupDir(): string
-    {
-        return self::root() . '/backups';
     }
 
     /* ---------------------------------------------------------------- */
@@ -440,132 +428,6 @@ final class JobsController extends Page
     }
 
     /* ---------------------------------------------------------------- */
-    /*  GET /backups                                                     */
-    /* ---------------------------------------------------------------- */
-
-    public function backups(Request $request): void
-    {
-        $this->admin();
-
-        $files = self::listBackups();
-        $live  = Db::one(
-            "SELECT j.*, u.email AS requested_by_email,
-                    EXTRACT(EPOCH FROM (NOW() - COALESCE(j.started_at, j.requested_at))) AS elapsed_s
-               FROM admin_jobs j LEFT JOIN users u ON u.id = j.requested_by
-              WHERE j.type = 'backup' AND j.status IN ('queued', 'running')
-              ORDER BY j.id DESC LIMIT 1"
-        );
-        $recent = Db::all(
-            "SELECT j.id, j.status, j.requested_at, j.finished_at, j.summary, u.email AS requested_by_email
-               FROM admin_jobs j LEFT JOIN users u ON u.id = j.requested_by
-              WHERE j.type = 'backup' AND j.status IN ('done', 'failed', 'cancelled')
-              ORDER BY j.id DESC LIMIT 8"
-        );
-
-        $this->render('jobs/backups', [
-            'files'     => $files,
-            'totalSize' => array_sum(array_column($files, 'size')),
-            'dir'       => self::backupDir(),
-            'writable'  => is_dir(self::backupDir()) ? is_writable(self::backupDir()) : is_writable(self::root()),
-            'live'      => $live,
-            'recent'    => $recent,
-        ], 'Backups', 'backups');
-    }
-
-    /* ---------------------------------------------------------------- */
-    /*  GET /backups/download?name=                                      */
-    /* ---------------------------------------------------------------- */
-
-    /** The one route that does not render HTML: streams a dump file. */
-    public function backupDownload(Request $request): void
-    {
-        $admin = $this->admin();
-
-        $path = self::backupPath((string) ($_GET['name'] ?? ''));
-        if ($path === null) {
-            $this->redirect('/backups', 'No such backup.', 'bad');
-            return;
-        }
-        $name = basename($path);
-        $size = (int) filesize($path);
-
-        // A dump holds every reader's data. Fetching one is worth a line in
-        // the audit log even though nothing changes.
-        Audit::record($admin['id'], $admin['email'], 'backup.download', 'backups', $name,
-                      null, ['name' => $name, 'size' => $size]);
-
-        if (!headers_sent()) {
-            http_response_code(200);
-            header('Content-Type: application/octet-stream');
-            header('Content-Disposition: attachment; filename="' . $name . '"');
-            header('Content-Length: ' . $size);
-            header('X-Content-Type-Options: nosniff');
-            header('Cache-Control: no-store');
-        }
-        readfile($path);
-    }
-
-    /* ---------------------------------------------------------------- */
-    /*  GET /backups/delete?name=  — confirmation                        */
-    /* ---------------------------------------------------------------- */
-
-    public function backupDeleteConfirm(Request $request): void
-    {
-        $this->admin();
-
-        $path = self::backupPath((string) ($_GET['name'] ?? ''));
-        if ($path === null) {
-            $this->redirect('/backups', 'No such backup.', 'bad');
-            return;
-        }
-
-        $files  = self::listBackups();
-        $name   = basename($path);
-        $newest = $files !== [] && $files[0]['name'] === $name;
-        $others = array_values(array_filter($files, static fn($f) => $f['name'] !== $name));
-
-        $this->render('jobs/backup_delete', [
-            'file'      => ['name' => $name, 'size' => (int) filesize($path), 'mtime' => (int) filemtime($path)],
-            'isNewest'  => $newest,
-            'remaining' => count($others),
-            'nextBest'  => $others[0] ?? null,
-        ], 'Delete backup', 'backups');
-    }
-
-    /* ---------------------------------------------------------------- */
-    /*  POST /backups/delete {name, confirm}                             */
-    /* ---------------------------------------------------------------- */
-
-    public function backupDelete(Request $request): void
-    {
-        $admin = $this->admin();
-        $this->csrf();
-
-        $name = (string) ($_POST['name'] ?? '');
-        $path = self::backupPath($name);
-        if ($path === null) {
-            $this->redirect('/backups', 'No such backup.', 'bad');
-            return;
-        }
-        if (($_POST['confirm'] ?? '') !== '1') {
-            $this->redirect('/backups/delete?name=' . rawurlencode(basename($path)),
-                            'Please confirm the deletion.', 'warn');
-            return;
-        }
-
-        $name   = basename($path);
-        $before = ['name' => $name, 'size' => (int) filesize($path), 'mtime' => gmdate('c', (int) filemtime($path))];
-
-        if (!@unlink($path)) {
-            $this->redirect('/backups', "Could not delete {$name} — check the directory permissions.", 'bad');
-            return;
-        }
-
-        Audit::record($admin['id'], $admin['email'], 'backup.delete', 'backups', $name, $before, null);
-        $this->redirect('/backups', "Deleted {$name}.");
-    }
-
-    /* ---------------------------------------------------------------- */
     /*  internals                                                        */
     /* ---------------------------------------------------------------- */
 
@@ -630,43 +492,6 @@ final class JobsController extends Page
     private function liveJobs(): array
     {
         return Db::all("SELECT id, type, status FROM admin_jobs WHERE status IN ('queued', 'running') ORDER BY id");
-    }
-
-    /**
-     * Resolve a backup name to a real file inside the backups directory, or
-     * null. Pattern first, then realpath: the pattern already excludes a
-     * slash or a dot-dot, and realpath makes the containment check hold
-     * even if the pattern is ever loosened.
-     */
-    private static function backupPath(string $name): ?string
-    {
-        if (!preg_match(self::BACKUP_NAME, $name)) {
-            return null;
-        }
-        $dir = realpath(self::backupDir());
-        if ($dir === false) {
-            return null;
-        }
-        $path = realpath($dir . '/' . $name);
-        if ($path === false || !is_file($path) || !str_starts_with($path, $dir . '/')) {
-            return null;
-        }
-        return $path;
-    }
-
-    /** @return array<int, array{name:string, size:int, mtime:int}> newest first */
-    private static function listBackups(): array
-    {
-        $out = [];
-        foreach (glob(self::backupDir() . '/fineprint-*.dump') ?: [] as $f) {
-            $name = basename($f);
-            if (!preg_match(self::BACKUP_NAME, $name) || !is_file($f)) {
-                continue;
-            }
-            $out[] = ['name' => $name, 'size' => (int) filesize($f), 'mtime' => (int) filemtime($f)];
-        }
-        usort($out, static fn($a, $b) => $b['mtime'] <=> $a['mtime'] ?: strcmp($b['name'], $a['name']));
-        return $out;
     }
 
     /** The next 03:10 UTC, as 'Y-m-d H:i UTC'. */

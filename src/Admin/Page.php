@@ -111,7 +111,7 @@ abstract class Page
     }
 
     /** A positive integer from the query string, or null. */
-    protected function intParam(string $key, array $from = null): ?int
+    protected function intParam(string $key, ?array $from = null): ?int
     {
         $from ??= $_GET;
         $v = $from[$key] ?? null;

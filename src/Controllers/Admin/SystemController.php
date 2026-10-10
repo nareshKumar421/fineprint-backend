@@ -11,8 +11,8 @@
  *   /audit      the audit_log, paginated and filterable. Every other module
  *               writes here; this is where those rows are read.
  *   /system     what the service is running on — versions, sizes, row
- *               counts, the last sync and job per type, the backups folder,
- *               and the environment with every value masked.
+ *               counts, the last sync and job per type, and the environment
+ *               with every value masked.
  *
  * Deliberately NOT here: the ranking constants. They live in
  * src/Services/Scoring.php and jobs/rollup_stats.php and must agree; an
@@ -31,7 +31,6 @@ use App\Env;
 use App\Request;
 use App\Services\Audit;
 use App\Services\Settings;
-use Throwable;
 
 final class SystemController extends Page
 {
@@ -271,12 +270,8 @@ final class SystemController extends Page
                    (SELECT count(*) FROM blog_sources WHERE is_active AND failure_count > 0) AS failing,
                    (SELECT count(*) FROM users WHERE role = 'admin' AND is_active)      AS admins,
                    (SELECT count(*) FROM article_events
-                     WHERE created_at > NOW() - INTERVAL '24 hours')                     AS events_24h,
-                   (SELECT max(finished_at) FROM admin_jobs
-                     WHERE type = 'backup' AND status = 'done')                          AS last_backup_job
+                     WHERE created_at > NOW() - INTERVAL '24 hours')                     AS events_24h
         ") ?? [];
-
-        $backups = self::backupsInfo();
 
         $uptime = null;
         if (@is_readable('/proc/1')) {
@@ -300,9 +295,6 @@ final class SystemController extends Page
         $lastSyncTs = isset($h['last_sync']) ? strtotime((string) $h['last_sync']) : false;
         $syncAge    = $lastSyncTs === false ? null : time() - $lastSyncTs;
 
-        $lastBackupTs = $backups['latest_mtime']
-            ?? (isset($h['last_backup_job']) ? (strtotime((string) $h['last_backup_job']) ?: null) : null);
-
         $checks = [
             [
                 'label'  => 'Last sync under 36 hours ago',
@@ -321,19 +313,6 @@ final class SystemController extends Page
                 'state'  => (int) ($h['failing'] ?? 0) === 0 ? 'ok' : 'warn',
                 'detail' => (int) ($h['failing'] ?? 0) === 0 ? 'No active source has a failure count.'
                           : (int) $h['failing'] . ' active source(s) with failures.',
-            ],
-            [
-                'label'  => 'Backups directory writable',
-                'state'  => $backups['writable'] ? 'ok' : 'bad',
-                'detail' => $backups['exists']
-                          ? ($backups['writable'] ? 'Writable.' : 'Exists but is not writable by this process.')
-                          : 'Directory does not exist: ' . $backups['path'],
-            ],
-            [
-                'label'  => 'A backup in the last 7 days',
-                'state'  => $lastBackupTs !== null && $lastBackupTs > time() - 7 * 86400 ? 'ok' : 'bad',
-                'detail' => $lastBackupTs === null ? 'No backup file and no completed backup job found.'
-                          : 'Latest ' . self::ago(time() - $lastBackupTs) . ' ago.',
             ],
             [
                 'label'  => 'At least one active admin',
@@ -357,59 +336,12 @@ final class SystemController extends Page
             'tables'      => $rowCounts,
             'lastSync'    => $lastSync,
             'jobs'        => $jobs,
-            'backups'     => $backups,
             'uptime'      => $uptime,
             'syncEnabled' => Settings::bool('sync.enabled', true),
             'env'         => $env,
             'checks'      => $checks,
             'appEnv'      => Env::get('APP_ENV', 'local'),
         ], 'System', 'system');
-    }
-
-    /**
-     * Facts about the backups folder. Inside the container it is
-     * /var/www/html/backups, bind-mounted from the host (docker-compose.yml);
-     * BACKUP_DIR overrides for other layouts.
-     *
-     * @return array{path:string, exists:bool, writable:bool, files:int, bytes:int,
-     *               latest_mtime:?int, latest_name:?string, free:?float}
-     */
-    private static function backupsInfo(): array
-    {
-        $path = Env::get('BACKUP_DIR', dirname(__DIR__, 3) . '/backups');
-        $info = [
-            'path' => $path, 'exists' => is_dir($path), 'writable' => false,
-            'files' => 0, 'bytes' => 0, 'latest_mtime' => null, 'latest_name' => null, 'free' => null,
-        ];
-
-        try {
-            if ($info['exists']) {
-                $info['writable'] = is_writable($path);
-                foreach (new \DirectoryIterator($path) as $f) {
-                    if (!$f->isFile()) {
-                        continue;
-                    }
-                    $info['files']++;
-                    $info['bytes'] += $f->getSize();
-                    if ($info['latest_mtime'] === null || $f->getMTime() > $info['latest_mtime']) {
-                        $info['latest_mtime'] = $f->getMTime();
-                        $info['latest_name']  = $f->getFilename();
-                    }
-                }
-            }
-            // Free space is a property of the filesystem, so the nearest
-            // existing ancestor answers for a folder not yet created.
-            $probe = $path;
-            while ($probe !== '' && $probe !== '/' && !is_dir($probe)) {
-                $probe = dirname($probe);
-            }
-            $free = @disk_free_space($probe);
-            $info['free'] = $free === false ? null : (float) $free;
-        } catch (Throwable $e) {
-            error_log('backupsInfo: ' . $e->getMessage());
-        }
-
-        return $info;
     }
 
     /** "3h 12m", "4d 2h". */

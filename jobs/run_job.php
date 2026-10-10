@@ -35,7 +35,6 @@ use App\Env;
 
 define('JOB_ROOT', dirname(__DIR__));
 const JOB_OUTPUT_CAP   = 65536;      // bytes of output kept, from the end
-const JOB_BACKUP_KEEP  = 14;         // days a dump is kept
 const JOB_SUMMARY_MAX  = 300;
 
 $id = (int) ($argv[1] ?? 0);
@@ -266,44 +265,6 @@ try {
                       explode("\n", $r['output'])), static fn($l) => str_starts_with($l, 'DELETE')), 0, 6))
                 : job_summary_from($r['output'], $r['exit']);
             $result = ['exit' => $r['exit'], 'output' => $r['output'], 'summary' => $summary];
-            break;
-
-        case 'backup':
-            if (Env::get('FEED_DB_URL') === '') {
-                throw new RuntimeException('FEED_DB_URL is not set — pg_dump cannot connect');
-            }
-            $dir = JOB_ROOT . '/backups';
-            if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
-                throw new RuntimeException("cannot create {$dir}");
-            }
-            $name = 'fineprint-' . gmdate('Ymd-His') . '.dump';
-            $r = job_run_command(
-                'pg_dump "$FEED_DB_URL" --no-owner --no-privileges -Fc -f ' . escapeshellarg('backups/' . $name),
-                job_child_env()
-            );
-            $path = $dir . '/' . $name;
-            if ($r['exit'] !== 0 || !is_file($path)) {
-                if (is_file($path)) {
-                    @unlink($path);                      // never leave a partial dump
-                }
-                $result = ['exit' => $r['exit'] ?: 1, 'output' => $r['output'],
-                           'summary' => job_summary_from($r['output'], $r['exit'] ?: 1)];
-                break;
-            }
-            $size = (int) filesize($path);
-
-            // Retention. Older dumps go; the new one is never a candidate.
-            $pruned = 0;
-            $cutoff = time() - JOB_BACKUP_KEEP * 86400;
-            foreach (glob($dir . '/fineprint-*.dump') ?: [] as $old) {
-                if ($old !== $path && is_file($old) && (int) filemtime($old) < $cutoff && @unlink($old)) {
-                    $pruned++;
-                }
-            }
-            $summary = sprintf('%s (%s); %d older dump(s) removed', $name, job_bytes($size), $pruned);
-            $result  = ['exit' => 0, 'summary' => $summary,
-                        'output' => $r['output'] . "\n" . "wrote backups/{$name} ({$size} bytes)\n"
-                                  . "pruned {$pruned} dump(s) older than " . JOB_BACKUP_KEEP . " days\n"];
             break;
 
         case 'validate_feed':

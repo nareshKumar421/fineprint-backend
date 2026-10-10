@@ -9,11 +9,20 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title><?= $e($title) ?> — FinePrint</title>
+<meta name="color-scheme" content="light dark">
+<script>
+/* Runs before the stylesheet so a saved dark preference never flashes light. */
+(function(){try{var t=localStorage.getItem('fp_theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})();
+</script>
 <style>
-  /* Light by default, dark when the OS asks. Every colour is a token so the
-     dark theme is a redefinition rather than a second stylesheet. The sidebar
-     is navy in both — dark mode only flips the content area and the cards. */
+  /* Light by default; dark when the reader picks it with the toggle in the
+     topbar (kept in localStorage as fp_theme and applied by the script above,
+     so the OS setting is not consulted — what you chose is what you get).
+     Every colour is a token so dark is a redefinition rather than a second
+     stylesheet. The sidebar is navy in both — dark only flips the content
+     area and the cards. */
   :root{
+    color-scheme:light;
     --bg:#f0f2f5; --card:#fff; --ink:#1f1f1f; --dim:#595959; --faint:#8c8c8c;
     --line:#f0f0f0; --line2:#e5e7eb; --accent:#1677ff; --accent-ink:#fff; --accent-soft:#e6f4ff;
     --side:#001529; --side-ink:#a6adb4; --side-ink-on:#fff; --side-line:rgba(255,255,255,.08);
@@ -27,20 +36,19 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
     --shadow:0 1px 2px rgba(0,0,0,.03);
     --radius:8px;
   }
-  @media(prefers-color-scheme:dark){
-    :root{
-      --bg:#0f1117; --card:#171a21; --ink:#e9eaee; --dim:#b4b9c3; --faint:#7c8290;
-      --line:#262a33; --line2:#30353f; --accent:#4096ff; --accent-ink:#fff; --accent-soft:#111d2c;
-      --side:#000f1f; --side-ink:#9aa3ad; --side-ink-on:#fff; --side-line:rgba(255,255,255,.08);
-      --t-blue:#111d2c; --t-blue-ink:#85b5ff;
-      --t-cyan:#0e2b2b; --t-cyan-ink:#5cdbd3;
-      --t-green:#132a13; --t-green-ink:#95de64;
-      --t-pink:#2c1618; --t-pink-ink:#ff7875;
-      --t-violet:#211533; --t-violet-ink:#b37feb;
-      --t-amber:#2b2111; --t-amber-ink:#ffd666;
-      --danger:#ff4d4f; --rank-top:#dfe4ea; --rank-top-ink:#0f1117;
-      --shadow:0 1px 2px rgba(0,0,0,.4);
-    }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0f1117; --card:#171a21; --ink:#e9eaee; --dim:#b4b9c3; --faint:#7c8290;
+    --line:#262a33; --line2:#30353f; --accent:#4096ff; --accent-ink:#fff; --accent-soft:#111d2c;
+    --side:#000f1f; --side-ink:#9aa3ad; --side-ink-on:#fff; --side-line:rgba(255,255,255,.08);
+    --t-blue:#111d2c; --t-blue-ink:#85b5ff;
+    --t-cyan:#0e2b2b; --t-cyan-ink:#5cdbd3;
+    --t-green:#132a13; --t-green-ink:#95de64;
+    --t-pink:#2c1618; --t-pink-ink:#ff7875;
+    --t-violet:#211533; --t-violet-ink:#b37feb;
+    --t-amber:#2b2111; --t-amber-ink:#ffd666;
+    --danger:#ff4d4f; --rank-top:#dfe4ea; --rank-top-ink:#0f1117;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
   }
   *{box-sizing:border-box}
   html,body{margin:0}
@@ -83,18 +91,25 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
           color:var(--dim);margin-left:-.5rem}
   .burger:hover{background:var(--bg);color:var(--ink)}
   .burger svg{width:20px;height:20px}
-  .crumb{font-size:.86rem;color:var(--faint)}
+  .crumb{font-size:.86rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .crumb b{color:var(--ink);font-weight:500}
-  .me{margin-left:auto;display:flex;align-items:center;gap:.65rem}
+  /* Right-hand cluster: theme toggle, who is signed in, sign out. */
+  .me{margin-left:auto;display:flex;align-items:center;gap:.25rem;flex:none}
+  .who{display:flex;align-items:center;gap:.6rem;padding:0 .6rem 0 .4rem}
   .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;
           display:grid;place-items:center;font-weight:700;font-size:.78rem;flex:none}
-  .me-n{font-size:.88rem;font-weight:600;line-height:1.2}
-  .me-r{font-size:.72rem;color:var(--faint)}
+  .me-n{font-size:.88rem;font-weight:600;line-height:1.2;white-space:nowrap}
+  .me-r{font-size:.72rem;color:var(--faint);line-height:1.2;white-space:nowrap}
   .me form{margin:0}
-  .signout{display:inline}
-  .linkbtn{background:none;border:0;color:var(--faint);font:inherit;font-size:.72rem;
-           cursor:pointer;padding:0;text-decoration:underline}
-  .linkbtn:hover{color:var(--accent)}
+  .iconbtn{display:inline-flex;align-items:center;gap:.4rem;height:34px;padding:0 .6rem;border-radius:6px;
+           border:1px solid transparent;background:none;color:var(--dim);font:inherit;font-size:.82rem;
+           cursor:pointer;white-space:nowrap}
+  .iconbtn:hover{background:var(--bg);color:var(--ink)}
+  .iconbtn svg{width:18px;height:18px;flex:none}
+  /* The toggle shows the theme you would switch TO. */
+  .ico-sun{display:none}
+  :root[data-theme="dark"] .ico-sun{display:inline-block}
+  :root[data-theme="dark"] .ico-moon{display:none}
 
   main,.content{padding:1.25rem 1.25rem 3rem;width:100%;max-width:1400px}
   .scrim{display:none}
@@ -118,7 +133,8 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
     .nav-toggle:checked ~ .shell .scrim{display:block}
     main,.content{padding:1rem 1rem 3rem}
     .topbar{padding:0 1rem}
-    .me-r{display:none} .signout .linkbtn{font-size:.8rem}
+    .who-t{display:none} .who{padding:0 .2rem}
+    .signout .iconbtn span{display:none} .iconbtn{padding:0 .45rem}
   }
 
   /* ================= page furniture ================= */
@@ -149,14 +165,14 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
   .grid .card .s{font-size:.76rem}
 
   /* ---- stat cards (reference style: label, number, secondary, hairline, caption) ---- */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin-bottom:1rem}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1rem;margin-bottom:1rem}
   .stat{display:flex;flex-direction:column;min-height:170px;padding:1rem 1.25rem .75rem}
   .stat-l{display:flex;align-items:center;font-size:.86rem;color:var(--faint)}
   .stat-l .info{margin-left:auto;width:16px;height:16px;color:var(--faint);opacity:.7}
   .stat-n{font-size:1.75rem;font-weight:500;letter-spacing:-.01em;line-height:1.25;margin:.35rem 0 .4rem;
           font-variant-numeric:tabular-nums}
   .stat-body{flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-height:46px}
-  .stat-s{display:flex;align-items:center;gap:.6rem;font-size:.84rem;color:var(--dim);line-height:1.9}
+  .stat-s{display:flex;align-items:center;gap:.6rem;font-size:.84rem;color:var(--dim);line-height:1.9;white-space:nowrap}
   .stat-s b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
   .stat-s .up{color:var(--t-green-ink)} .stat-s .down{color:var(--t-pink-ink)}
   .stat-s .arrow{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;display:inline-block}
@@ -165,7 +181,7 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
   .spark{display:block;width:100%;height:46px}
   .spark svg{width:100%;height:46px;display:block}
   .stat-foot{border-top:1px solid var(--line2);margin-top:.6rem;padding-top:.6rem;font-size:.84rem;
-             color:var(--dim);display:flex;gap:.4rem;align-items:center}
+             color:var(--dim);display:flex;gap:.4rem;align-items:center;white-space:nowrap}
   .stat-foot b{color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
 
   /* ---- cards ---- */
@@ -303,6 +319,7 @@ $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES);
     font-size:.95rem;cursor:pointer}
   .login button[type=submit]:hover{background:color-mix(in srgb,var(--accent) 85%,#000)}
   .login-foot{text-align:center;color:var(--faint);font-size:.78rem;margin-top:1.25rem}
+  .login-theme{position:fixed;top:.9rem;right:.9rem}
 </style>
 </head>
 <?php
@@ -310,16 +327,43 @@ $icon = static fn(string $d): string =>
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
   . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $d . '</svg>';
 $mark = $icon('<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/>');
+// One button carries both glyphs; the stylesheet shows the one for the theme
+// you would switch TO, and the script at the foot of the page does the switch.
+$themeBtn = '<button type="button" class="iconbtn theme-btn" title="Switch to dark mode" aria-label="Switch to dark mode">'
+  . str_replace('<svg ', '<svg class="ico-moon" ', $icon('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'))
+  . str_replace('<svg ', '<svg class="ico-sun" ', $icon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/>'
+      . '<path d="m4.9 4.9 1.4 1.4"/><path d="m17.7 17.7 1.4 1.4"/><path d="M2 12h2"/><path d="M20 12h2"/>'
+      . '<path d="m6.3 17.7-1.4 1.4"/><path d="m19.1 4.9-1.4 1.4"/>'))
+  . '</button>';
+$themeScript = <<<'JS'
+<script>
+(function(){
+  var root=document.documentElement;
+  function current(){return root.getAttribute('data-theme')==='dark'?'dark':'light'}
+  function label(){var next=current()==='dark'?'light':'dark';
+    document.querySelectorAll('.theme-btn').forEach(function(b){b.title='Switch to '+next+' mode';b.setAttribute('aria-label',b.title)})}
+  document.addEventListener('click',function(ev){
+    if(!ev.target.closest||!ev.target.closest('.theme-btn'))return;
+    var next=current()==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('fp_theme',next)}catch(e){}
+    label()});
+  label();
+})();
+</script>
+JS;
 $flashHtml = '';
 if (!empty($flash)) {
   $flashHtml = '<div class="flash ' . $e($flash['tone']) . '"><span>' . $e($flash['text']) . '</span></div>';
 }
 if ($admin === null): ?>
 <body class="is-login">
+<div class="login-theme"><?= $themeBtn ?></div>
 <main>
 <?= $flashHtml ?>
 <?= $body ?>
 </main>
+<?= $themeScript ?>
 </body>
 </html>
 <?php return; endif;
@@ -360,16 +404,20 @@ foreach (\App\Admin\Nav::items() as $it) {
       </label>
       <div class="crumb">Admin / <b><?= $e($title) ?></b></div>
       <div class="me">
-        <div class="avatar"><?= $e($initials) ?></div>
-        <div>
-          <div class="me-n"><?= $e($admin['name'] ?: $admin['email']) ?></div>
-          <div class="me-r">Administrator</div>
-        <form method="post" action="/logout" class="signout">
-              <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
-              <button class="linkbtn">Sign out</button>
-            </form>
+        <?= $themeBtn ?>
+        <div class="who">
+          <div class="avatar"><?= $e($initials) ?></div>
+          <div class="who-t">
+            <div class="me-n"><?= $e($admin['name'] ?: $admin['email']) ?></div>
+            <div class="me-r">Administrator</div>
           </div>
         </div>
+        <form method="post" action="/logout" class="signout">
+          <input type="hidden" name="csrf" value="<?= $e($csrf) ?>">
+          <button type="submit" class="iconbtn" title="Sign out" aria-label="Sign out">
+            <?= $icon('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>') ?><span>Sign out</span>
+          </button>
+        </form>
       </div>
     </header>
 
@@ -379,5 +427,6 @@ foreach (\App\Admin\Nav::items() as $it) {
     </main>
   </div>
 </div>
+<?= $themeScript ?>
 </body>
 </html>
