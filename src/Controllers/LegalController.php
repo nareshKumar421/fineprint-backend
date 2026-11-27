@@ -26,9 +26,9 @@ use App\Response;
 final class LegalController
 {
     /** Update when the substance changes, not on every deploy. */
-    private const LAST_UPDATED = '10 October 2026';
+    private const LAST_UPDATED = '27 November 2026';
 
-    private const CONTACT = 'jivoit0@gmail.com';
+    private const CONTACT = 'nkk124421@gmail.com';
 
     public function privacy(Request $request): void
     {
