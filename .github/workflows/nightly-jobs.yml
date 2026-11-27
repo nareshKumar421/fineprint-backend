@@ -10,8 +10,8 @@
 #
 #  What this workflow does instead is ASK the server whether last night
 #  happened. /health reports the newest sync_status row; if it is older
-#  than 6 hours at 04:00 UTC, the 03:10 cron did not run or did not
-#  finish, and this run fails — which is the point: GitHub emails the
+#  than 26 hours, the 03:10 cron did not run or did not finish, and this
+#  run fails — which is the point: GitHub emails the
 #  account that last edited this file, so a silent nightly outage becomes
 #  a notification. A cron that stops is invisible otherwise.
 #
@@ -25,9 +25,9 @@ name: nightly-jobs
 
 on:
   schedule:
-    # 04:00 UTC — 50 minutes after the server's 03:10 cron. A full fetch
-    # across 76 feeds takes ~100 s; the margin is for slow upstreams and
-    # GitHub's best-effort scheduler, which can lag by several minutes.
+    # 04:00 UTC — 50 minutes after the server's 03:10 cron. In practice
+    # GitHub's best-effort scheduler starts it 8–10 h late (seen 11:56–14:27
+    # UTC through Nov 2026), which is why the age limit below is 26 h.
     - cron: '0 4 * * *'
   workflow_dispatch:
 
@@ -64,11 +64,14 @@ jobs:
             echo "::error::no sync has ever been recorded"; exit 1
           fi
 
-          # Scheduled at 04:00: last night's 03:10 run must be the newest, so
-          # anything older than 6 h means it did not happen (a manual "Sync
-          # now" the previous evening cannot mask it). Run by hand at any
-          # hour, the question is only "has it run in the last day".
-          max_h=6; [ "$GITHUB_EVENT_NAME" = "schedule" ] || max_h=26
+          # "Has it run in the last day?" A 6 h limit was tighter, but GitHub
+          # starts the 04:00 schedule 8–10 h late, so a healthy 03:10 run
+          # was ~10 h old by then and failed every day. 26 h tolerates any
+          # start delay under ~23 h and still catches a missed night: skip
+          # one 03:10 run and the newest sync is ~35 h old by the next check.
+          # Trade-off: a manual "Sync now" in the evening can mask one missed
+          # night.
+          max_h=26
 
           age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
           printf 'last sync %s — %dh %02dm ago (limit %dh); %s articles\n' "$last" $((age/3600)) $((age%3600/60)) "$max_h" "$articles"
