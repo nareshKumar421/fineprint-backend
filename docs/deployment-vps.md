@@ -5,20 +5,21 @@ box. This is the only backend; the mobile app talks to it. The retired
 Render/Neon deployment is described in [deployment.md](deployment.md), kept
 for the reasons that outlived it.
 
-## Two hostnames, one service
+## Hostname
 
-`fineprint.2cent.me` is the canonical name (since 2026-11-27): the APK from
-1.0.2 on, `APP_URL`, the admin panel and the privacy URL all use it.
+`fineprint.2cent.me` is the only name (since 2026-11-27): the APK from 1.0.2
+on, `APP_URL`, the admin panel and the privacy URL all use it. Its DNS `A`
+record must be **129.159.237.197** — the zone is at asurahosting.
 
-`fineprint.nareshkumar.online` is still served — **identically, not
-redirected**. Every APK up to 1.0.1 has it baked into the bundle and cannot be
-repointed. A 301 would not save them: clients turn a redirected `POST` into a
-`GET`, so login and event uploads would break. Both names sit in `server_name`
-in both nginx files and on the one `fineprint` certificate. Drop the old name
-only once no installed build still uses it.
-
-Admin sessions are host-only cookies, so signing in on one name does not sign
-you in on the other.
+`fineprint.nareshkumar.online` was dropped the same day, by decision: it is
+gone from both nginx files and from the certificate. **APKs up to 1.0.1 have
+it baked into the bundle and no longer reach the backend** — those installs
+need the 1.0.2 update. A request for the old name now falls to the
+neighbour's default vhost and fails (444 on :80, certificate mismatch on
+:443). Bringing it back means re-adding it to `server_name` in both files and
+re-issuing the `fineprint` certificate with both `-d` names; redirecting
+instead would not help old builds, since clients turn a redirected `POST`
+into a `GET`.
 
 ## What runs where
 
@@ -27,7 +28,7 @@ you in on the other.
 | App | `fineprint-app` container, Apache + mod_php, **host network**, Apache bound to `127.0.0.1:8081` |
 | Database | `fineprint` database inside the **existing** `portfolio-db-1` container (PostgreSQL 18.6) |
 | Web | host nginx 1.18 → `fineprint-http.conf`, `fineprint-https.conf` |
-| TLS | Let's Encrypt, cert name `fineprint`, both hostnames, webroot `/var/www/certbot`, expires 2027-02-25, auto-renewing |
+| TLS | Let's Encrypt, cert name `fineprint`, `fineprint.2cent.me` only, webroot `/var/www/certbot`, expires 2027-02-25, auto-renewing (needs the DNS above to be right) |
 | Cron | `~/fineprint/sync.sh` at **03:10 UTC** |
 | Host | `ubuntu@129.159.237.197`, Ubuntu 20.04, 2 vCPU, ~950MB RAM + 2GB swap |
 
