@@ -1,7 +1,7 @@
 > # SUPERSEDED — 10 October 2026
 >
 > This describes the **retired** Render + Neon deployment. FinePrint now runs
-> on a self-hosted VPS at **https://fineprint.nareshkumar.online** with its
+> on a self-hosted VPS at **https://fineprint.2cent.me** with its
 > database inside the host's existing PostgreSQL container.
 >
 > **See [deployment-vps.md](deployment-vps.md) instead.**

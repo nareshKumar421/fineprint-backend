@@ -1,9 +1,24 @@
-# Deployment — fineprint.nareshkumar.online
+# Deployment — fineprint.2cent.me
 
 The self-hosted deployment, alongside an unrelated application on the same
 box. This is the only backend; the mobile app talks to it. The retired
 Render/Neon deployment is described in [deployment.md](deployment.md), kept
 for the reasons that outlived it.
+
+## Two hostnames, one service
+
+`fineprint.2cent.me` is the canonical name (since 2026-11-27): the APK from
+1.0.2 on, `APP_URL`, the admin panel and the privacy URL all use it.
+
+`fineprint.nareshkumar.online` is still served — **identically, not
+redirected**. Every APK up to 1.0.1 has it baked into the bundle and cannot be
+repointed. A 301 would not save them: clients turn a redirected `POST` into a
+`GET`, so login and event uploads would break. Both names sit in `server_name`
+in both nginx files and on the one `fineprint` certificate. Drop the old name
+only once no installed build still uses it.
+
+Admin sessions are host-only cookies, so signing in on one name does not sign
+you in on the other.
 
 ## What runs where
 
@@ -12,7 +27,7 @@ for the reasons that outlived it.
 | App | `fineprint-app` container, Apache + mod_php, **host network**, Apache bound to `127.0.0.1:8081` |
 | Database | `fineprint` database inside the **existing** `portfolio-db-1` container (PostgreSQL 18.6) |
 | Web | host nginx 1.18 → `fineprint-http.conf`, `fineprint-https.conf` |
-| TLS | Let's Encrypt, cert name `fineprint`, expires 2027-01-08, auto-renewing |
+| TLS | Let's Encrypt, cert name `fineprint`, both hostnames, webroot `/var/www/certbot`, expires 2027-02-25, auto-renewing |
 | Cron | `~/fineprint/sync.sh` at **03:10 UTC** |
 | Host | `ubuntu@129.159.237.197`, Ubuntu 20.04, 2 vCPU, ~950MB RAM + 2GB swap |
 

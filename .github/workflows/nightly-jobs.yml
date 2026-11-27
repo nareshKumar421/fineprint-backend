@@ -42,7 +42,7 @@ jobs:
       - name: Fetch /health
         run: |
           for attempt in 1 2 3; do
-            if curl -sS --max-time 30 -o health.json https://fineprint.nareshkumar.online/health; then
+            if curl -sS --max-time 30 -o health.json https://fineprint.2cent.me/health; then
               break
             fi
             echo "attempt $attempt failed"; sleep 20

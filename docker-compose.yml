@@ -57,7 +57,7 @@ services:
       INSTAMOJO_AUTH_TOKEN: ${INSTAMOJO_AUTH_TOKEN:-}
       INSTAMOJO_SALT: ${INSTAMOJO_SALT:-}
       INSTAMOJO_BASE_URL: ${INSTAMOJO_BASE_URL:-}
-      FEED_USER_AGENT: ${FEED_USER_AGENT:-FinePrintApp/1.0 (+https://fineprint.nareshkumar.online/about)}
+      FEED_USER_AGENT: ${FEED_USER_AGENT:-FinePrintApp/1.0 (+https://fineprint.2cent.me/about)}
       FEED_HTTP_TIMEOUT: ${FEED_HTTP_TIMEOUT:-15}
       FEED_MAX_FAILURES: ${FEED_MAX_FAILURES:-5}
       FEED_EXCERPT_CHARS: ${FEED_EXCERPT_CHARS:-200}

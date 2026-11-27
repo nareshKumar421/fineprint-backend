@@ -6,7 +6,7 @@
  * has to be a real web page rather than a document in a repository. The API
  * is already a public HTTPS host, so it serves one:
  *
- *     https://fineprint.nareshkumar.online/privacy
+ *     https://fineprint.2cent.me/privacy
  *
  * It is written from what the code ACTUALLY does. A policy that describes an
  * app you meant to build is worse than none: it is a public, dated statement

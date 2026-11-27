@@ -37,7 +37,7 @@ jobs:
           code=000
           for attempt in 1 2 3; do
             code=$(curl -s -o body.json -w '%{http_code}' --max-time 30 \
-              https://fineprint.nareshkumar.online/health || echo 000)
+              https://fineprint.2cent.me/health || echo 000)
             db=$(jq -r '.database // empty' body.json 2>/dev/null || true)
             echo "attempt $attempt -> HTTP $code, database=${db:-?}"
             if [ "$code" = "200" ] && [ "$db" = "up" ]; then
